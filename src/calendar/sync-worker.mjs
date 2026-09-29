@@ -1,7 +1,9 @@
 export class SyncWorker {
-  constructor({ accounts, sync, intervalMs = 300_000 }) {
+  constructor({ accounts, sync, upload = null, policy = null, intervalMs = 300_000 }) {
     this.accounts = accounts;
     this.sync = sync;
+    this.upload = upload;
+    this.policy = policy;
     this.intervalMs = intervalMs;
     this.running = null;
     this.timer = null;
@@ -22,6 +24,9 @@ export class SyncWorker {
           this.locks.add(account.id);
           try {
             await this.sync(account.id, { mode: 'incremental' });
+            if (this.upload && this.policy?.shouldAutoUpload?.(account.id)) {
+              await this.upload(account.id);
+            }
             results.push({ accountId: account.id, status: 'ok' });
           } catch (error) {
             results.push({ accountId: account.id, status: 'error', error: error.message });

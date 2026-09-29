@@ -1,6 +1,7 @@
 import { assertSafeMetadata } from '../core/account-registry.mjs';
 import { createApproval, verifyApproval } from '../core/approval.mjs';
 import { buildVeventIcal } from '../calendar/ical.mjs';
+import { updateEventLocal } from '../calendar/local-event-service.mjs';
 
 /**
  * Build MCP tool handler functions (testable without stdio transport).
@@ -135,10 +136,42 @@ export function createMcpHandlers({ store, calendarService, pendingApprovals }) 
       pendingApprovals.delete(approvalId);
       if (!calendarService) return { error: 'calendar_service_unavailable' };
       try {
-        return await calendarService.writeEvent(normalized.accountId, normalized);
+        return await calendarService.writeEvent(normalized.accountId, normalized, { store });
       } catch (error) {
         return { error: error.message };
       }
+    },
+
+    async sync_policy_get({ accountId, calendarId }) {
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      return store.getSyncPolicy(accountId, calendarId);
+    },
+
+    async sync_policy_set({ accountId, calendarId, autoUpload }) {
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      return store.setSyncPolicy(accountId, calendarId, { autoUpload: Boolean(autoUpload) });
+    },
+
+    async event_update_local(input) {
+      if (!registry.status(input.accountId)?.enabled) return { error: 'account_not_active' };
+      try {
+        return updateEventLocal(store, input);
+      } catch (error) {
+        return { error: error.message };
+      }
+    },
+
+    async event_upload_status({ accountId, calendarId = null }) {
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      const pending = store.listDirtyEvents(accountId, { calendarId, status: 'pending' });
+      const failed = store.listDirtyEvents(accountId, { calendarId, status: 'failed' });
+      const conflict = store.listDirtyEvents(accountId, { calendarId, status: 'conflict' });
+      return { pending, failed, conflict };
+    },
+
+    async event_conflicts({ accountId }) {
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      return store.listConflicts(accountId);
     }
   };
 }

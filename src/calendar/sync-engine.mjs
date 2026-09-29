@@ -19,6 +19,9 @@ export async function syncAccount({ accountId, provider, store, mode = 'incremen
     await store.upsertCalendar({ ...calendar, accountId, calendarId });
     let folderCount = 0;
     for await (const event of provider.fetchEvents(calendar, { mode, checkpoint })) {
+      if (store.hasPendingDirtyEvent?.(accountId, calendarId, event.uid)) {
+        continue;
+      }
       await store.upsertEvent({ ...event, accountId, calendarId });
       eventCount += 1;
       folderCount += 1;

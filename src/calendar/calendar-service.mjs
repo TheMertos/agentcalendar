@@ -1,5 +1,6 @@
 import { syncAccount } from './sync-engine.mjs';
 import { writeEventWithVerification } from './write-service.mjs';
+import { uploadPendingForAccount } from './upload-service.mjs';
 
 const SENSITIVE = /password|token|secret|private.?key|credential/i;
 
@@ -56,12 +57,41 @@ export class CalendarService {
     }
   }
 
-  async writeEvent(accountId, payload) {
+  async writeEvent(accountId, payload, { store } = {}) {
     const account = this.#requireAccount(accountId);
     const lease = await this.#acquireLease(accountId);
     const provider = await this.providerFactory({ account, lease, operation: 'caldav-sync' });
     try {
-      return await writeEventWithVerification({ provider, payload });
+      const enriched = { ...payload };
+      if (store && payload.uid) {
+        const existing = store.getEvent(accountId, payload.calendarId, payload.uid);
+        if (existing?.etag && enriched.etag == null) enriched.etag = existing.etag;
+      }
+      const result = await writeEventWithVerification({ provider, payload: enriched });
+      if (store && payload.uid) {
+        store.upsertEvent({
+          accountId,
+          calendarId: payload.calendarId,
+          uid: payload.uid,
+          etag: result.etag,
+          raw: payload.icalBody
+        });
+        store.clearDirtyEvent?.(accountId, payload.calendarId, payload.uid);
+      }
+      return result;
+    } finally {
+      await provider.close?.();
+      await this.leaseBroker.release?.(lease);
+    }
+  }
+
+  async uploadDirtyEvents(accountId, { store }) {
+    const account = this.#requireAccount(accountId);
+    if (!store) throw new Error('calendar_store_unavailable');
+    const lease = await this.#acquireLease(accountId);
+    const provider = await this.providerFactory({ account, lease, operation: 'caldav-sync' });
+    try {
+      return await uploadPendingForAccount({ accountId, provider, store });
     } finally {
       await provider.close?.();
       await this.leaseBroker.release?.(lease);

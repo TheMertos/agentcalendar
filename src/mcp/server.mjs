@@ -48,6 +48,12 @@ const handlers = createMcpHandlers({ store, calendarService, pendingApprovals })
 const syncWorker = new SyncWorker({
   accounts: { list: () => store.listActiveAccounts() },
   sync: (accountId, options) => calendarService.syncAccount(accountId, { ...options, store }),
+  upload: (accountId) => calendarService.uploadDirtyEvents(accountId, { store }),
+  policy: {
+    shouldAutoUpload(accountId) {
+      return store.listSyncPolicies(accountId).some((row) => row.autoUpload);
+    }
+  },
   intervalMs: config.syncIntervalSeconds * 1000
 });
 syncWorker.start();
@@ -149,6 +155,44 @@ server.registerTool('event_write', {
     icalBody: z.string().min(1)
   }
 }, async (input) => text(await handlers.event_write(input)));
+
+server.registerTool('sync_policy_get', {
+  description: 'Read per-calendar autoUpload policy (default false).',
+  inputSchema: { accountId: z.string().min(1), calendarId: z.string().min(1) }
+}, async (input) => text(await handlers.sync_policy_get(input)));
+
+server.registerTool('sync_policy_set', {
+  description: 'Set per-calendar autoUpload policy for background uploads.',
+  inputSchema: {
+    accountId: z.string().min(1),
+    calendarId: z.string().min(1),
+    autoUpload: z.boolean()
+  }
+}, async (input) => text(await handlers.sync_policy_set(input)));
+
+server.registerTool('event_update_local', {
+  description: 'Mutate the local mirror and enqueue a dirty upload (does not contact CalDAV).',
+  inputSchema: {
+    accountId: z.string().min(1),
+    calendarId: z.string().min(1),
+    uid: z.string().min(1),
+    summary: z.string().optional(),
+    description: z.string().optional(),
+    location: z.string().optional(),
+    start: z.string().optional(),
+    end: z.string().optional()
+  }
+}, async (input) => text(await handlers.event_update_local(input)));
+
+server.registerTool('event_upload_status', {
+  description: 'List dirty upload queue rows for an account.',
+  inputSchema: { accountId: z.string().min(1), calendarId: z.string().optional() }
+}, async (input) => text(await handlers.event_upload_status(input)));
+
+server.registerTool('event_conflicts', {
+  description: 'List ETag conflicts detected during upload.',
+  inputSchema: { accountId: z.string().min(1) }
+}, async ({ accountId }) => text(await handlers.event_conflicts({ accountId })));
 
 async function main() {
   if (config.transport !== 'stdio') {

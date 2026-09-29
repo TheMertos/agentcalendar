@@ -51,6 +51,40 @@ const SCHEMA = `
     updated_at TEXT NOT NULL,
     PRIMARY KEY (account_id, calendar_id)
   );
+  CREATE TABLE IF NOT EXISTS sync_policies (
+    account_id TEXT NOT NULL,
+    calendar_id TEXT NOT NULL,
+    auto_upload INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, calendar_id)
+  );
+  CREATE TABLE IF NOT EXISTS dirty_events (
+    account_id TEXT NOT NULL,
+    calendar_id TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    expected_etag TEXT,
+    ical_body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    last_error TEXT,
+    error_class TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, calendar_id, uid)
+  );
+  CREATE INDEX IF NOT EXISTS dirty_events_account_status ON dirty_events(account_id, status);
+  CREATE TABLE IF NOT EXISTS sync_conflicts (
+    conflict_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    calendar_id TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    expected_etag TEXT,
+    remote_etag TEXT,
+    message TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS sync_conflicts_account ON sync_conflicts(account_id);
 `;
 
 /**
@@ -201,6 +235,154 @@ export class SqliteCalendarStore {
     });
   }
 
+  getSyncPolicy(accountId, calendarId) {
+    const row = this.db
+      .prepare('SELECT auto_upload FROM sync_policies WHERE account_id = ? AND calendar_id = ?')
+      .get(accountId, calendarId);
+    return { accountId, calendarId, autoUpload: row ? Boolean(row.auto_upload) : false };
+  }
+
+  setSyncPolicy(accountId, calendarId, { autoUpload }) {
+    const updatedAt = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO sync_policies(account_id, calendar_id, auto_upload, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_id, calendar_id) DO UPDATE SET
+           auto_upload = excluded.auto_upload, updated_at = excluded.updated_at`
+      )
+      .run(accountId, calendarId, autoUpload ? 1 : 0, updatedAt);
+    return this.getSyncPolicy(accountId, calendarId);
+  }
+
+  listSyncPolicies(accountId) {
+    return this.db
+      .prepare('SELECT * FROM sync_policies WHERE account_id = ? ORDER BY calendar_id')
+      .all(accountId)
+      .map((row) => ({
+        accountId: row.account_id,
+        calendarId: row.calendar_id,
+        autoUpload: Boolean(row.auto_upload)
+      }));
+  }
+
+  hasPendingDirtyEvent(accountId, calendarId, uid) {
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM dirty_events
+         WHERE account_id = ? AND calendar_id = ? AND uid = ?
+           AND status IN ('pending', 'failed')`
+      )
+      .get(accountId, calendarId, uid);
+    return Boolean(row);
+  }
+
+  enqueueDirtyEvent({ accountId, calendarId, uid, expectedEtag, icalBody }) {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO dirty_events(account_id, calendar_id, uid, expected_etag, ical_body, status,
+           attempt_count, next_retry_at, last_error, error_class, created_at, updated_at)
+         VALUES (@accountId, @calendarId, @uid, @expectedEtag, @icalBody, 'pending', 0, NULL, NULL, NULL, @now, @now)
+         ON CONFLICT(account_id, calendar_id, uid) DO UPDATE SET
+           expected_etag = excluded.expected_etag,
+           ical_body = excluded.ical_body,
+           status = 'pending',
+           attempt_count = 0,
+           next_retry_at = NULL,
+           last_error = NULL,
+           error_class = NULL,
+           updated_at = excluded.updated_at`
+      )
+      .run({ accountId, calendarId, uid, expectedEtag: expectedEtag ?? null, icalBody, now });
+    return this.getDirtyEvent(accountId, calendarId, uid);
+  }
+
+  getDirtyEvent(accountId, calendarId, uid) {
+    const row = this.db
+      .prepare('SELECT * FROM dirty_events WHERE account_id = ? AND calendar_id = ? AND uid = ?')
+      .get(accountId, calendarId, uid);
+    return row ? this.#rowToDirty(row) : null;
+  }
+
+  listDirtyEvents(accountId, { calendarId = null, status = null } = {}) {
+    const clauses = ['account_id = @accountId'];
+    const params = { accountId };
+    if (calendarId) {
+      clauses.push('calendar_id = @calendarId');
+      params.calendarId = calendarId;
+    }
+    if (status) {
+      clauses.push('status = @status');
+      params.status = status;
+    }
+    const sql = `SELECT * FROM dirty_events WHERE ${clauses.join(' AND ')} ORDER BY updated_at`;
+    return this.db.prepare(sql).all(params).map((row) => this.#rowToDirty(row));
+  }
+
+  updateDirtyEventState(accountId, calendarId, uid, patch) {
+    const current = this.getDirtyEvent(accountId, calendarId, uid);
+    if (!current) return null;
+    const updatedAt = new Date().toISOString();
+    this.db
+      .prepare(
+        `UPDATE dirty_events SET
+           status = @status,
+           attempt_count = @attemptCount,
+           next_retry_at = @nextRetryAt,
+           last_error = @lastError,
+           error_class = @errorClass,
+           updated_at = @updatedAt
+         WHERE account_id = @accountId AND calendar_id = @calendarId AND uid = @uid`
+      )
+      .run({
+        accountId,
+        calendarId,
+        uid,
+        status: patch.status ?? current.status,
+        attemptCount: patch.attemptCount ?? current.attemptCount,
+        nextRetryAt: patch.nextRetryAt ?? current.nextRetryAt,
+        lastError: patch.lastError ?? current.lastError,
+        errorClass: patch.errorClass ?? current.errorClass,
+        updatedAt
+      });
+    return this.getDirtyEvent(accountId, calendarId, uid);
+  }
+
+  clearDirtyEvent(accountId, calendarId, uid) {
+    this.db
+      .prepare('DELETE FROM dirty_events WHERE account_id = ? AND calendar_id = ? AND uid = ?')
+      .run(accountId, calendarId, uid);
+  }
+
+  recordConflict({ accountId, calendarId, uid, expectedEtag, remoteEtag, message }) {
+    const conflictId = `${accountId}::${calendarId}::${uid}::${Date.now()}`;
+    const createdAt = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO sync_conflicts(conflict_id, account_id, calendar_id, uid, expected_etag, remote_etag, message, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(conflictId, accountId, calendarId, uid, expectedEtag ?? null, remoteEtag ?? null, message ?? null, createdAt);
+    return { conflictId, accountId, calendarId, uid, expectedEtag, remoteEtag, message, createdAt };
+  }
+
+  listConflicts(accountId) {
+    return this.db
+      .prepare('SELECT * FROM sync_conflicts WHERE account_id = ? ORDER BY created_at DESC')
+      .all(accountId)
+      .map((row) => ({
+        conflictId: row.conflict_id,
+        accountId: row.account_id,
+        calendarId: row.calendar_id,
+        uid: row.uid,
+        expectedEtag: row.expected_etag,
+        remoteEtag: row.remote_etag,
+        message: row.message,
+        createdAt: row.created_at
+      }));
+  }
+
   upsertEvent(event) {
     this.upsertEventStatement.run({
       accountId: event.accountId,
@@ -257,6 +439,23 @@ export class SqliteCalendarStore {
     }
     const sql = `SELECT * FROM events WHERE ${clauses.join(' AND ')} ORDER BY start_time LIMIT @limit`;
     return this.db.prepare(sql).all(params).map((row) => this.#rowToEvent(row));
+  }
+
+  #rowToDirty(row) {
+    return {
+      accountId: row.account_id,
+      calendarId: row.calendar_id,
+      uid: row.uid,
+      expectedEtag: row.expected_etag,
+      icalBody: row.ical_body,
+      status: row.status,
+      attemptCount: row.attempt_count,
+      nextRetryAt: row.next_retry_at,
+      lastError: row.last_error,
+      errorClass: row.error_class,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
   }
 
   #rowToEvent(row) {

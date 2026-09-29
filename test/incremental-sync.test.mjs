@@ -29,6 +29,32 @@ test('incremental sync skips calendars with unchanged ctag', async () => {
   assert.equal(result.skippedCalendars, 1);
 });
 
+test('incremental sync does not overwrite events with pending dirty uploads', async () => {
+  const upserts = [];
+  const store = {
+    async getCheckpoint() { return null; },
+    async upsertCalendar() {},
+    hasPendingDirtyEvent(_accountId, _calendarId, uid) {
+      return uid === 'dirty-u';
+    },
+    async upsertEvent(event) {
+      upserts.push(event.uid);
+    },
+    async checkpoint() {}
+  };
+  const provider = {
+    async listCalendars() {
+      return [{ id: 'cal-1', ctag: 'ctag-v1' }];
+    },
+    async *fetchEvents() {
+      yield { uid: 'dirty-u', etag: 'e1', summary: 'remote', raw: 'RAW1' };
+      yield { uid: 'clean-u', etag: 'e2', summary: 'remote', raw: 'RAW2' };
+    }
+  };
+  await syncAccount({ accountId: 'a', provider, store, mode: 'incremental' });
+  assert.deepEqual(upserts, ['clean-u']);
+});
+
 test('full sync refetches every calendar', async () => {
   const fetched = [];
   const store = {

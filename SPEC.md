@@ -54,7 +54,20 @@ Event
 - Idempotent upsert by `(accountId, calendarId, uid)`.
 - A background `SyncWorker` (model on AgentMail's `src/mail/sync-worker.mjs`) that runs on an interval and syncs every active+enabled account, with per-account locking to prevent overlapping syncs.
 
-## MCP tools to implement (mirror AgentMail's naming conventions)
+## Bidirectional synchronization (required)
+
+- Download sync remains provider → SQLite mirror.
+- Add an explicit per-account/calendar `autoUpload` policy, default `false`.
+- Local event mutations create a durable `dirty_events`/upload queue entry rather than silently changing the provider.
+- When `autoUpload=true`, the background worker uploads dirty events to CalDAV after the normal policy/approval decision; it must never upload arbitrary downloaded mirror rows.
+- Preserve event UID and use the last known ETag with `If-Match` to prevent overwriting remote changes.
+- On ETag conflict, do not overwrite or retry blindly; persist a conflict record and expose it through MCP.
+- After PUT, read the event back and update local ETag/raw/dirty state only after UID and content verification.
+- Retry transient failures with bounded exponential backoff; retain failed jobs and error class.
+- Add MCP tools: `sync_policy_get`, `sync_policy_set`, `event_update_local`, `event_upload_status`, and `event_conflicts`.
+- `event_write` remains available for explicit immediate writes and uses the same ETag/read-back rules.
+- Test dirty queue idempotency, upload success, conflict protection, retry behavior, and autoUpload off/on behavior with TDD.
+
 
 Account management:
 - `calendar_account_list` — metadata only, never credentials
