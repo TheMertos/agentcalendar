@@ -1,0 +1,26 @@
+{
+  "name": "agentcalendar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless, human-controlled MCP CalDAV calendar server",
+  "scripts": {
+    "start": "node src/mcp/server.mjs",
+    "test": "node --test",
+    "lint": "eslint src test",
+    "check": "yarn lint && yarn test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "better-sqlite3": "13.0.3",
+    "tsdav": "2.3.4",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "eslint": "9.39.2"
+  }
+}

@@ -1,0 +1,144 @@
+import { assertSafeMetadata } from '../core/account-registry.mjs';
+import { createApproval, verifyApproval } from '../core/approval.mjs';
+import { buildVeventIcal } from '../calendar/ical.mjs';
+
+/**
+ * Build MCP tool handler functions (testable without stdio transport).
+ * @param {{ store: object, calendarService: object|null, pendingApprovals: Map }} deps
+ */
+export function createMcpHandlers({ store, calendarService, pendingApprovals }) {
+  const registry = {
+    list: () =>
+      store.listActiveAccounts().map(({ secretRef, ...account }) => ({
+        ...account,
+        hasCredentialReference: true
+      })),
+    status: (id) => {
+      const account = store.getAccount(id);
+      return account
+        ? {
+            id: account.id,
+            email: account.email,
+            provider: account.provider,
+            enabled: account.enabled,
+            hasCredentialReference: true
+          }
+        : null;
+    },
+    register: (account) => {
+      assertSafeMetadata(account.connection ?? {}, 'connection');
+      return store.activateAccount(account);
+    }
+  };
+
+  return {
+    async calendar_account_list() {
+      return registry.list();
+    },
+
+    async calendar_account_status({ accountId }) {
+      const status = registry.status(accountId);
+      return status ?? { error: 'account_not_found' };
+    },
+
+    async calendar_account_register(account) {
+      try {
+        return registry.register(account);
+      } catch (error) {
+        return { error: error.message };
+      }
+    },
+
+    async calendar_account_deactivate({ accountId }) {
+      store.deactivateAccount(accountId);
+      return { accountId, status: 'inactive', localDataRetained: true };
+    },
+
+    async calendar_list({ accountId }) {
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      if (!calendarService) return { error: 'calendar_service_unavailable' };
+      try {
+        return await calendarService.listCalendars(accountId);
+      } catch (error) {
+        return { error: error.message };
+      }
+    },
+
+    async calendar_sync({ accountId, mode = 'incremental' }) {
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      if (!calendarService) return { error: 'calendar_service_unavailable' };
+      try {
+        return await calendarService.syncAccount(accountId, { mode, store });
+      } catch (error) {
+        return { error: error.message };
+      }
+    },
+
+    async calendar_sync_all({ mode = 'incremental' }) {
+      const results = [];
+      for (const account of registry.list()) {
+        try {
+          results.push(await calendarService.syncAccount(account.id, { mode, store }));
+        } catch (error) {
+          results.push({ accountId: account.id, error: error.message });
+        }
+      }
+      return { mode, results };
+    },
+
+    async event_search({ accountId, query = '', start = null, end = null, limit = 50 }) {
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      return store.searchEvents(accountId, { query, start, end, limit });
+    },
+
+    async event_read({ eventKey }) {
+      const accountId = eventKey.split('::', 1)[0];
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      const event = store.getEventByKey(eventKey);
+      return event ?? { error: 'event_not_found' };
+    },
+
+    async event_preview(input) {
+      const accountId = input.accountId;
+      if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
+      const icalBody = buildVeventIcal({
+        uid: input.uid,
+        summary: input.summary,
+        description: input.description,
+        location: input.location,
+        start: input.start,
+        end: input.end,
+        attendees: input.attendees,
+        organizer: input.organizer,
+        recurrenceRule: input.recurrenceRule
+      });
+      return { accountId, calendarId: input.calendarId, uid: input.uid ?? null, icalBody };
+    },
+
+    async event_approval_create(payload) {
+      if (!registry.status(payload.accountId)?.enabled) return { error: 'account_not_active' };
+      const approval = createApproval(payload, { ttlSeconds: 300 });
+      pendingApprovals.set(approval.id, { approval, payload });
+      return approval;
+    },
+
+    async event_write({ approvalId, ...payload }) {
+      const entry = pendingApprovals.get(approvalId);
+      if (!entry) return { error: 'approval_not_found' };
+      const normalized = {
+        accountId: payload.accountId,
+        calendarId: payload.calendarId,
+        uid: payload.uid ?? null,
+        icalBody: payload.icalBody
+      };
+      if (!verifyApproval(entry.approval, normalized)) return { error: 'approval_invalid_or_expired' };
+      pendingApprovals.delete(approvalId);
+      if (!calendarService) return { error: 'calendar_service_unavailable' };
+      try {
+        return await calendarService.writeEvent(normalized.accountId, normalized);
+      } catch (error) {
+        return { error: error.message };
+      }
+    }
+  };
+}

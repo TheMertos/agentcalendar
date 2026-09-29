@@ -1,0 +1,23 @@
+services:
+  agentcalendar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentcalendar
+    restart: unless-stopped
+    stdin_open: true
+    tty: false
+    environment:
+      AGENTCAL_DB_PATH: /data/agentcalendar.db
+      AGENTCAL_SYNC_INTERVAL_SECONDS: "300"
+      AGENTCAL_LOG_LEVEL: info
+      AGENTCAL_TRANSPORT: stdio
+      SECRET_FABRIC_URL: ${SECRET_FABRIC_URL:?SECRET_FABRIC_URL is required}
+      SECRET_FABRIC_API_TOKEN: ${SECRET_FABRIC_API_TOKEN:?SECRET_FABRIC_API_TOKEN is required}
+    network_mode: "host"
+    volumes:
+      - agentcalendar-data:/data
+
+volumes:
+  agentcalendar-data:
+    name: agentcalendar-data
