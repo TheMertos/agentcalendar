@@ -38,7 +38,7 @@ async function providerFactory({ account, lease }) {
 }
 
 const calendarService = new CalendarService({
-  accountRegistry: store,
+  accountRegistry: { get: (accountId) => store.getAccount(accountId) },
   leaseBroker,
   providerFactory
 });
