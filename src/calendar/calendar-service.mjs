@@ -1,5 +1,16 @@
 import { parseVeventFields } from './ical.mjs';
 import { writeEventWithVerification } from './write-service.mjs';
+import {
+  buildEventSearchPage,
+  decodeEventCursor,
+  encodeEventCursor,
+  eventVisible,
+  narrowWindow,
+  normalizeEventSearch,
+  resolveWindow,
+  sameInstant,
+  sortEvents
+} from './event-search.mjs';
 
 const SENSITIVE = /password|token|secret|private.?key|credential/i;
 
@@ -25,10 +36,14 @@ export const CALDAV_SYNC_FIELDS = [
  * CalDAV operations with lease-gated provider access.
  */
 export class CalendarService {
-  constructor({ accountRegistry, leaseBroker, providerFactory }) {
+  /**
+   * @param {{ accountRegistry: object, leaseBroker: object, providerFactory: Function, now?: () => Date }} deps Service dependencies.
+   */
+  constructor({ accountRegistry, leaseBroker, providerFactory, now }) {
     this.accountRegistry = accountRegistry;
     this.leaseBroker = leaseBroker;
     this.providerFactory = providerFactory;
+    this.now = typeof now === 'function' ? now : () => new Date();
   }
 
   async listCalendars(accountId) {
@@ -49,30 +64,62 @@ export class CalendarService {
 
   /**
    * Search live CalDAV events. Does not read or write the local event mirror.
+   * One calendar is queried. The provider must apply the limit; this method does not scan every remote event.
+   * A cursor is returned only when the provider reports a bounded REPORT.
    * @param {string} accountId Account id.
-   * @param {{ query?: string, start?: string|null, end?: string|null, limit?: number }} criteria Search criteria.
-   * @returns {Promise<object[]>} Matching events.
+   * @param {object} [criteria] Search criteria.
+   * @returns {Promise<object>} Page with items, nextCursor, hasMore, appliedFilters, and total.
    */
-  async searchEvents(accountId, { query = '', start = null, end = null, limit = 50 } = {}) {
+  async searchEvents(accountId, criteria = {}) {
+    const normalized = normalizeEventSearch(criteria);
     const account = this.#requireAccount(accountId);
+    const cursor = normalized.cursor ? decodeEventCursor(normalized.cursor, accountId, normalized) : null;
     const lease = await this.#acquireLease(accountId);
     const provider = await this.providerFactory({ account, lease, operation: 'caldav-sync' });
     try {
-      if (typeof provider.listCalendars !== 'function' || typeof provider.fetchEvents !== 'function') {
-        throw new Error('provider_unavailable');
+      if (typeof provider.queryEvents !== 'function') throw new Error('pagination_unavailable');
+      const calendar = cursor
+        ? { calendarId: cursor.calendarId, reports: [] }
+        : await this.#searchCalendar(provider, account, normalized.calendarId);
+      if (!calendar) {
+        return buildEventSearchPage({
+          items: [],
+          hasMore: false,
+          nextCursor: null,
+          appliedFilters: appliedFilters(accountId, null, resolveWindow(normalized, this.now()), normalized)
+        });
       }
-      const calendars = await provider.listCalendars();
-      const hits = [];
-      for (const calendar of calendars) {
-        const calendarId = calendar.calendarId ?? calendar.id ?? calendar.url;
-        for await (const event of provider.fetchEvents(calendar)) {
-          const shaped = shapeRemoteEvent(accountId, calendarId, event);
-          if (!eventMatches(shaped, { query, start, end })) continue;
-          hits.push(shaped);
-        }
+      const window = cursor
+        ? { start: cursor.windowStart, end: cursor.windowEnd }
+        : resolveWindow(normalized, this.now());
+      const queried = narrowWindow(window, cursor, normalized.sortOrder);
+      if (!(Date.parse(queried.start) < Date.parse(queried.end))) {
+        return buildEventSearchPage({
+          items: [],
+          hasMore: false,
+          nextCursor: null,
+          appliedFilters: appliedFilters(accountId, calendar.calendarId, window, normalized)
+        });
       }
-      hits.sort((left, right) => String(left.start ?? '').localeCompare(String(right.start ?? '')));
-      return hits.slice(0, limit);
+      const result = await provider.queryEvents({
+        calendarId: calendar.calendarId,
+        reports: calendar.reports ?? [],
+        start: queried.start,
+        end: queried.end,
+        query: normalized.query,
+        limit: normalized.limit,
+        sortBy: normalized.sortBy,
+        sortOrder: normalized.sortOrder,
+        cursor: normalized.cursor
+      });
+      return pageQueryResult({
+        accountId,
+        calendarId: calendar.calendarId,
+        normalized,
+        window,
+        queried,
+        result
+      });
     } finally {
       await provider.close?.();
       await this.leaseBroker.release?.(lease);
@@ -127,6 +174,31 @@ export class CalendarService {
 
   async uploadDirtyEvents() {
     throw remoteOnlyError('remote_only_sync_disabled');
+  }
+
+  /**
+   * Choose the single calendar a search may query.
+   * @param {object} provider CalDAV provider.
+   * @param {object} account Account record.
+   * @param {string|null} calendarId Requested calendar URL.
+   * @returns {Promise<{ calendarId: string, reports: unknown[] }|null>} Calendar scope.
+   */
+  async #searchCalendar(provider, account, calendarId) {
+    if (calendarId) return { calendarId, reports: [] };
+    if (typeof provider.listCalendars !== 'function') throw new Error('provider_unavailable');
+    const calendars = await provider.listCalendars();
+    const path = account?.connection?.calendarPath;
+    const match = path
+      ? calendars.find((calendar) => {
+        const id = calendar.url ?? calendar.calendarId ?? calendar.id ?? '';
+        return id.includes(path) || id.endsWith(path);
+      })
+      : null;
+    const selected = match ?? calendars[0];
+    if (!selected) return null;
+    const id = selected.url ?? selected.calendarId ?? selected.id;
+    if (!id) return null;
+    return { calendarId: id, reports: selected.reports ?? [] };
   }
 
   #requireAccount(accountId) {
@@ -186,34 +258,63 @@ function shapeRemoteEvent(accountId, calendarId, event) {
 }
 
 /**
- * True when an event matches text and optional date bounds.
- * @param {object} event Shaped event.
- * @param {{ query: string, start: string|null, end: string|null }} criteria Criteria.
- * @returns {boolean}
+ * Turn a bounded provider result into one search page.
+ * @param {{ accountId: string, calendarId: string, normalized: object, window: { start: string, end: string }, queried: { start: string, end: string }, result: object }} input Query result.
+ * @returns {object} Search page.
  */
-function eventMatches(event, { query, start, end }) {
-  if (query) {
-    const haystack = `${event.summary ?? ''}\n${event.description ?? ''}\n${event.location ?? ''}\n${event.raw ?? ''}`.toLowerCase();
-    if (!haystack.includes(String(query).toLowerCase())) return false;
+function pageQueryResult({ accountId, calendarId, normalized, window, queried, result }) {
+  if (!result || !Array.isArray(result.events)) throw new Error('provider_unavailable');
+  if (normalized.cursor && result.bounded !== true) throw new Error('pagination_unavailable');
+  if (result.events.length > normalized.limit + 1) throw new Error('pagination_unavailable');
+  if (result.bounded !== true && (result.events.length > normalized.limit || result.hasMore === true)) {
+    throw new Error('pagination_unavailable');
   }
-  const eventStart = eventInstant(event.start);
-  const eventEnd = eventInstant(event.end) ?? eventStart;
-  if (start && eventEnd != null && eventEnd < eventInstant(start)) return false;
-  if (end && eventStart != null && eventStart > eventInstant(end)) return false;
-  return true;
+  const shaped = result.events.map((event) => shapeRemoteEvent(accountId, calendarId, event));
+  const visible = shaped.filter((event) => eventVisible(event, {
+    query: normalized.query,
+    start: queried.start,
+    end: queried.end
+  }));
+  if (visible.length !== shaped.length && result.bounded === true && result.events.length > normalized.limit) {
+    throw new Error('pagination_unavailable');
+  }
+  const ordered = sortEvents(visible, normalized.sortOrder);
+  const bounded = result.bounded === true;
+  const hasMore = bounded && (ordered.length > normalized.limit || (result.hasMore === true && ordered.length === normalized.limit));
+  const items = ordered.slice(0, normalized.limit);
+  if (hasMore && ordered.length > normalized.limit && sameInstant(items.at(-1), ordered[normalized.limit])) {
+    throw new Error('pagination_unavailable');
+  }
+  const nextCursor = hasMore
+    ? encodeEventCursor({ accountId, normalized, calendarId, window, event: items.at(-1) })
+    : null;
+  return buildEventSearchPage({
+    items,
+    hasMore,
+    nextCursor,
+    appliedFilters: appliedFilters(accountId, calendarId, window, normalized)
+  });
 }
 
 /**
- * Parse an ISO or iCal UTC timestamp.
- * @param {string|null|undefined} value Timestamp.
- * @returns {number|null} Epoch milliseconds.
+ * Filters reported with a search page.
+ * @param {string} accountId Account id.
+ * @param {string|null} calendarId Calendar URL.
+ * @param {{ start: string, end: string }} window Resolved window.
+ * @param {object} normalized Normalized criteria.
+ * @returns {object} Applied filters.
  */
-function eventInstant(value) {
-  if (!value) return null;
-  const ical = String(value).match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
-  const iso = ical ? `${ical[1]}-${ical[2]}-${ical[3]}T${ical[4]}:${ical[5]}:${ical[6]}Z` : value;
-  const parsed = Date.parse(iso);
-  return Number.isNaN(parsed) ? null : parsed;
+function appliedFilters(accountId, calendarId, window, normalized) {
+  return {
+    accountId,
+    calendarId,
+    query: normalized.query,
+    start: window.start,
+    end: window.end,
+    limit: normalized.limit,
+    sortBy: normalized.sortBy,
+    sortOrder: normalized.sortOrder
+  };
 }
 
 /**

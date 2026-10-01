@@ -28,6 +28,10 @@ Headless MCP CalDAV calendar server for AI agents. Sibling to [AgentMail](https:
 | `AGENTCAL_TRANSPORT` | `stdio` (only mode implemented in v0.1) |
 | `SECRET_FABRIC_URL` | SecretFabric base URL |
 | `SECRET_FABRIC_API_TOKEN` | Bearer token for `/api/resolve` |
+| `AGENTCAL_PRINCIPAL` | Trusted principal. Must match `SECRET_FABRIC_PRINCIPAL` |
+| `SECRET_FABRIC_PRINCIPAL` | Sent as `x-hermes-principal`. Never taken from tool arguments |
+| `AGENTCAL_SERVICE_MODE` | `native` or `docker`. Defaults to `docker` |
+| `AGENTCAL_PROFILE` | Required when `AGENTCAL_SERVICE_MODE=native`. Must match the principal |
 
 ## Local development
 
@@ -46,6 +50,17 @@ yarn start
 
 `yarn start` is the MCP stdio server. It does not start a sync loop.
 
+## Native host service
+
+The supported process is Node on the host, started by `tools/hermes-agentcalendar-mcp.sh` or the systemd user template `deploy/systemd/user/agentcalendar@.service`. Both set `AGENTCAL_SERVICE_MODE=native` and the profile principal. They do not start a sync worker. Install steps are in [`docs/COMPOSE-TRANSITION.md`](docs/COMPOSE-TRANSITION.md).
+
+```bash
+export SECRET_FABRIC_URL=http://127.0.0.1:3000
+export SECRET_FABRIC_API_TOKEN=your-token
+export HERMES_HOME="$HOME/.hermes"
+tools/hermes-agentcalendar-mcp.sh
+```
+
 ## Docker
 
 ```bash
@@ -55,24 +70,24 @@ docker compose build
 docker compose up -d
 ```
 
-`docker compose up` starts only the MCP server and keeps the named `agentcalendar-data` volume. Compose has no worker service. The image entrypoint is `node src/mcp/server.mjs`, so `docker compose run --rm -T agentcalendar` is the stdio MCP process. `AGENTCAL_SYNC_INTERVAL_SECONDS` is set in Compose only so startup validation succeeds.
+`docker compose up` starts only the MCP server and keeps the named `agentcalendar-data` volume. Compose has no worker service. The image entrypoint is `node src/mcp/server.mjs`. `AGENTCAL_SERVICE_MODE=docker` marks this path as the transition runtime. Do not remove the volume or stop a running container just to switch to the native service. `AGENTCAL_SYNC_INTERVAL_SECONDS` is set in Compose only so startup validation succeeds.
 
 `network_mode: host` lets the container reach SecretFabric on the host loopback.
 
 ## Hermes MCP example
 
 ```bash
-hermes mcp add agentcalendar -- docker compose -f /path/to/agentcalendar/compose.yaml run --rm -T agentcalendar
+hermes mcp add agentcalendar -- /path/to/agentcalendar/tools/hermes-agentcalendar-mcp.sh
 ```
 
-(Adjust paths and ensure `SECRET_FABRIC_*` are set in the environment passed to Compose.)
+`SECRET_FABRIC_URL` and `SECRET_FABRIC_API_TOKEN` must be in the environment Hermes passes to the wrapper. The wrapper sets `AGENTCAL_PRINCIPAL` and `SECRET_FABRIC_PRINCIPAL` from `HERMES_HOME`.
 
 ## MCP tools (summary)
 
 - Accounts: `calendar_account_list`, `calendar_account_status`, `calendar_account_register`, `calendar_account_deactivate` — metadata and opaque refs, never credentials
 - Calendars: `calendar_list` — live CalDAV list
 - Sync status is inert: `calendar_sync` and `calendar_sync_all` report `mode: remote-only`, `syncEnabled: false`, and do not contact CalDAV
-- Read: `event_search` and `event_read` query CalDAV directly
+- Read: `event_search` and `event_read` query CalDAV directly. `event_search` reads one calendar, inside a time window (30 days before and after now when dates are omitted). The page size is 50 by default and 200 at most, ordered by date descending or ascending. A `nextCursor` is returned only when the CalDAV client honors a bounded calendar-query. If the window is larger than the page and the server cannot limit the REPORT, the tool returns `pagination_unavailable` and does not download every event body.
 - Write (approval-gated): `event_preview` → `event_approval_create` → `event_write`
 - Disabled local/queue tools return an error and do not mutate a mirror: `event_update_local` (`remote_only_local_writes_disabled`), `event_upload_status` and `event_conflicts` (`remote_only_sync_disabled`)
 

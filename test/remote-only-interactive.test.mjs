@@ -36,22 +36,36 @@ test('event_search uses CalDAV and does not read the local mirror', async () => 
         return [{ id: 'https://cal.example.test/home/', url: 'https://cal.example.test/home/' }];
       },
       async *fetchEvents() {
-        yield {
-          uid: 'remote-1',
-          etag: 'e-live',
-          summary: 'Live standup',
-          raw: 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:remote-1\r\nSUMMARY:Live standup\r\nDTSTART:20260102T100000Z\r\nDTEND:20260102T110000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n'
+        throw new Error('unbounded_fetch');
+      },
+      async queryEvents() {
+        return {
+          events: [{
+            uid: 'remote-1',
+            etag: 'e-live',
+            summary: 'Live standup',
+            start: '2026-01-02T10:00:00.000Z',
+            raw: 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:remote-1\r\nSUMMARY:Live standup\r\nDTSTART:20260102T100000Z\r\nDTEND:20260102T110000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n'
+          }],
+          bounded: false,
+          hasMore: false
         };
       },
       async close() {}
     })
   });
   const handlers = createMcpHandlers({ store, calendarService, pendingApprovals: new Map() });
-  const hits = await handlers.event_search({ accountId: 'a', query: 'standup', limit: 10 });
+  const hits = await handlers.event_search({
+    accountId: 'a',
+    query: 'standup',
+    start: '2026-01-01T00:00:00.000Z',
+    end: '2026-01-03T00:00:00.000Z',
+    limit: 10
+  });
   assert.equal(listed, true);
-  assert.equal(hits.length, 1);
-  assert.equal(hits[0].uid, 'remote-1');
-  assert.equal(hits[0].etag, 'e-live');
+  assert.equal(hits.items.length, 1);
+  assert.equal(hits.items[0].uid, 'remote-1');
+  assert.equal(hits.items[0].etag, 'e-live');
   assert.equal(JSON.stringify(hits).includes('Cached'), false);
   store.close();
 });
@@ -81,6 +95,7 @@ test('event_search fails closed when CalDAV fails', async () => {
     providerFactory: async () => ({
       async listCalendars() { throw new Error('caldav_down'); },
       async *fetchEvents() {},
+      async queryEvents() { throw new Error('caldav_down'); },
       async close() {}
     })
   });

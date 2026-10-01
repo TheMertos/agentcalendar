@@ -79,11 +79,12 @@ export function createMcpHandlers({ store, calendarService, pendingApprovals }) 
       };
     },
 
-    async event_search({ accountId, query = '', start = null, end = null, limit = 50 }) {
+    async event_search(input) {
+      const accountId = input?.accountId;
       if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
       if (typeof calendarService?.searchEvents !== 'function') return { error: 'calendar_service_unavailable' };
       try {
-        return await calendarService.searchEvents(accountId, { query, start, end, limit });
+        return await calendarService.searchEvents(accountId, input ?? {});
       } catch (error) {
         return { error: error.message || 'provider_unavailable' };
       }

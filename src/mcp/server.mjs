@@ -58,13 +58,17 @@ server.registerTool('calendar_sync_all', {
 }, async () => text(await handlers.calendar_sync_all()));
 
 server.registerTool('event_search', {
-  description: 'Search live CalDAV events by text and optional date range. Does not read a local event mirror.',
+  description: 'Search live CalDAV events in one calendar. Explicit calendarId searches only that calendar. Omitted calendarId searches the account calendar path, or the first calendar. The time window defaults to 30 days before and after now. Page size defaults to 50 and cannot exceed 200. Results are ordered by date descending unless sortOrder is asc. A nextCursor is returned only when the server honors a bounded calendar-query. Otherwise an oversized window fails with pagination_unavailable and event bodies are not downloaded. Does not read a local event mirror.',
   inputSchema: {
     accountId: z.string().min(1),
+    calendarId: z.string().min(1).optional(),
     query: z.string().default(''),
     start: z.string().nullable().optional(),
     end: z.string().nullable().optional(),
-    limit: z.number().int().min(1).max(200).default(50)
+    limit: z.number().int().min(1).max(200).default(50),
+    sortBy: z.enum(['date']).default('date'),
+    sortOrder: z.enum(['asc', 'desc']).default('desc'),
+    cursor: z.string().min(1).optional()
   }
 }, async (input) => text(await handlers.event_search(input)));
 
