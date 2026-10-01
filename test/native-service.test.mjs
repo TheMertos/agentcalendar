@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.mjs';
 import { assertNativeService } from '../src/runtime/native-service.mjs';
@@ -121,6 +121,85 @@ test('hermes wrapper runs node with the derived principal and fails closed witho
   assert.match(log, /sf:default/);
   assert.match(log, new RegExp(`db:${home}/.local/share/agentcalendar/default/agentcalendar.db`));
   assert.match(log, /hold:$/m);
+});
+
+/**
+ * Install a fake node that records its launch line.
+ * @param {string} binDir Directory that receives the node executable.
+ * @param {string} logPath File that receives the launch record.
+ */
+function installFakeNode(binDir, logPath) {
+  mkdirSync(binDir, { recursive: true });
+  const fake = join(binDir, 'node');
+  writeFileSync(
+    fake,
+    `#!/usr/bin/env bash
+printf 'argv:%s\\n' "$*" > "${logPath}"
+exit 0
+`
+  );
+  chmodSync(fake, 0o755);
+}
+
+test('native launcher finds node when PATH is the systemd user default', () => {
+  const unit = readFileSync(unitPath, 'utf8');
+  assert.match(unit, /Environment=PATH=%h\/\.local\/bin:%h\/\.hermes\/node\/bin:/);
+
+  const home = mkdtempSync(join(tmpdir(), 'agentcal-systemd-node-'));
+  const logPath = join(home, 'node.log');
+  installFakeNode(join(home, '.hermes', 'node', 'bin'), logPath);
+  const systemdPath = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+  const fromHermes = runScript(nativePath, {
+    args: ['--service', 'default'],
+    env: {
+      HOME: home,
+      PATH: systemdPath,
+      SECRET_FABRIC_URL: 'http://127.0.0.1:3000',
+      SECRET_FABRIC_API_TOKEN: 'tok'
+    }
+  });
+  assert.equal(fromHermes.status, 0, fromHermes.stderr);
+  assert.match(readFileSync(logPath, 'utf8'), /argv:src\/mcp\/server\.mjs/);
+
+  const localHome = mkdtempSync(join(tmpdir(), 'agentcal-systemd-local-node-'));
+  const localLog = join(localHome, 'node.log');
+  installFakeNode(join(localHome, '.local', 'bin'), localLog);
+  const fromLocal = runScript(nativePath, {
+    args: ['--service', 'default'],
+    env: {
+      HOME: localHome,
+      PATH: systemdPath,
+      SECRET_FABRIC_URL: 'http://127.0.0.1:3000',
+      SECRET_FABRIC_API_TOKEN: 'tok'
+    }
+  });
+  assert.equal(fromLocal.status, 0, fromLocal.stderr);
+  assert.match(readFileSync(localLog, 'utf8'), /argv:src\/mcp\/server\.mjs/);
+});
+
+test('native hold stays running until SIGTERM', async () => {
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'agentcal-hold-')), 'agentcalendar.db');
+  const child = spawn(process.execPath, [join(repoRoot, 'src/mcp/server.mjs')], {
+    env: {
+      ...BASE_ENV,
+      AGENTCAL_DB_PATH: dbPath,
+      AGENTCAL_NATIVE_HOLD: '1',
+      PATH: process.env.PATH
+    },
+    stdio: 'ignore'
+  });
+  const exited = new Promise((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  const early = await Promise.race([
+    exited,
+    new Promise((resolve) => setTimeout(() => resolve({ running: true }), 1000))
+  ]);
+  assert.equal(early.running, true);
+  child.kill('SIGTERM');
+  const finished = await exited;
+  assert.equal(finished.code, 0);
+  assert.equal(finished.signal, null);
 });
 
 test('native MCP startup fails closed when principal configuration is missing', () => {
