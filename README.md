@@ -80,7 +80,7 @@ docker compose up -d
 hermes mcp add agentcalendar -- /path/to/agentcalendar/tools/hermes-agentcalendar-mcp.sh
 ```
 
-`SECRET_FABRIC_URL` and `SECRET_FABRIC_API_TOKEN` must be in the environment Hermes passes to the wrapper. The wrapper sets `AGENTCAL_PRINCIPAL` and `SECRET_FABRIC_PRINCIPAL` from `HERMES_HOME`.
+Register the native wrapper, not `docker exec`. The wrapper sets `AGENTCAL_PRINCIPAL` and `SECRET_FABRIC_PRINCIPAL` from `HERMES_HOME`. Empty `SECRET_FABRIC_URL` and `SECRET_FABRIC_API_TOKEN` values are loaded from `~/.config/agentcalendar/<profile>.env`. Values already present in the environment are kept. The wrapper exits if either value is still missing and does not print secrets.
 
 ## MCP tools (summary)
 
