@@ -24,7 +24,6 @@ test('calendar service acquires lease before sync and releases provider', async 
     leaseBroker,
     providerFactory: async () => provider
   });
-  const result = await service.syncAccount('a', { mode: 'full', store });
-  assert.equal(result.events, 1);
-  assert.equal(released, true);
+  await assert.rejects(() => service.syncAccount('a', { mode: 'full', store }), /remote_only_sync_disabled/);
+  assert.equal(released, false);
 });

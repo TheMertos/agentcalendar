@@ -95,6 +95,7 @@ export class SqliteCalendarStore {
   constructor(filename = ':memory:') {
     this.db = new Database(filename);
     this.db.pragma('journal_mode = WAL');
+    this.db.pragma('busy_timeout = 5000');
     this.db.exec(SCHEMA);
     this.accountStatement = this.db.prepare(
       `INSERT INTO active_accounts(account_id, email, provider, secret_ref, connection_json, enabled, updated_at)
@@ -206,6 +207,25 @@ export class SqliteCalendarStore {
         timezone: row.timezone,
         ctag: row.ctag,
         etag: row.etag
+      }));
+  }
+
+  /**
+   * List stored sync checkpoints for one account.
+   * @param {string} accountId Account id.
+   * @returns {Array<{ accountId: string, calendarId: string, mode: string, eventCount: number, calendarCtag: string|null, updatedAt: string }>} Checkpoint rows.
+   */
+  listCheckpoints(accountId) {
+    return this.db
+      .prepare('SELECT * FROM sync_checkpoints WHERE account_id = ? ORDER BY calendar_id')
+      .all(accountId)
+      .map((row) => ({
+        accountId: row.account_id,
+        calendarId: row.calendar_id,
+        mode: row.mode,
+        eventCount: row.event_count,
+        calendarCtag: row.calendar_ctag,
+        updatedAt: row.updated_at
       }));
   }
 

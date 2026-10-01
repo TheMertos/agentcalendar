@@ -6,6 +6,7 @@
   "description": "Headless, human-controlled MCP CalDAV calendar server",
   "scripts": {
     "start": "node src/mcp/server.mjs",
+    "start:worker": "node -e \"process.stderr.write('remote_only_sync_disabled\\n'); process.exit(1)\"",
     "test": "node --test",
     "lint": "eslint src test",
     "check": "yarn lint && yarn test"

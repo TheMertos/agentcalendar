@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMcpHandlers } from '../src/mcp/handlers.mjs';
 import { SqliteCalendarStore } from '../src/storage/sqlite-store.mjs';
-import { buildVeventIcal } from '../src/calendar/ical.mjs';
 
 function activeStore() {
   const store = new SqliteCalendarStore(':memory:');
@@ -16,6 +15,43 @@ function activeStore() {
   return store;
 }
 
+test('calendar_sync and calendar_sync_all report checkpoints without starting sync', async () => {
+  const store = activeStore();
+  store.checkpoint({
+    accountId: 'a',
+    calendarId: 'cal-1',
+    mode: 'incremental',
+    eventCount: 3,
+    calendarCtag: 'ctag-1'
+  });
+  let synced = false;
+  const handlers = createMcpHandlers({
+    store,
+    calendarService: {
+      async syncAccount() {
+        synced = true;
+        return { events: 1 };
+      }
+    },
+    pendingApprovals: new Map()
+  });
+  const status = await handlers.calendar_sync({ accountId: 'a', mode: 'full' });
+  assert.equal(synced, false);
+  assert.equal(status.syncStarted, false);
+  assert.equal(status.mode, 'remote-only');
+  assert.equal(status.syncEnabled, false);
+  assert.deepEqual(status.calendars, []);
+  assert.equal(JSON.stringify(status).includes('ctag-1'), false);
+  assert.equal(status.secretRef, undefined);
+  assert.equal(status.password, undefined);
+  const all = await handlers.calendar_sync_all({ mode: 'full' });
+  assert.equal(synced, false);
+  assert.equal(all.syncStarted, false);
+  assert.equal(all.accounts.length, 1);
+  assert.deepEqual(all.accounts[0].calendars, []);
+  store.close();
+});
+
 test('sync_policy_get and sync_policy_set', async () => {
   const store = activeStore();
   const handlers = createMcpHandlers({ store, calendarService: null, pendingApprovals: new Map() });
@@ -27,24 +63,8 @@ test('sync_policy_get and sync_policy_set', async () => {
   store.close();
 });
 
-test('event_update_local enqueues dirty row', async () => {
+test('event_update_local does not write a local event', async () => {
   const store = activeStore();
-  const raw = buildVeventIcal({
-    uid: 'u1',
-    summary: 'S',
-    start: '2026-01-01T10:00:00Z',
-    end: '2026-01-01T11:00:00Z'
-  });
-  store.upsertEvent({
-    accountId: 'a',
-    calendarId: 'cal',
-    uid: 'u1',
-    etag: 'e1',
-    summary: 'S',
-    raw,
-    start: '2026-01-01T10:00:00Z',
-    end: '2026-01-01T11:00:00Z'
-  });
   const handlers = createMcpHandlers({ store, calendarService: null, pendingApprovals: new Map() });
   const result = await handlers.event_update_local({
     accountId: 'a',
@@ -52,13 +72,14 @@ test('event_update_local enqueues dirty row', async () => {
     uid: 'u1',
     summary: 'Changed'
   });
-  assert.equal(result.summary, 'Changed');
+  assert.equal(result.error, 'remote_only_local_writes_disabled');
+  assert.equal(store.getEvent('a', 'cal', 'u1'), null);
   const status = await handlers.event_upload_status({ accountId: 'a' });
-  assert.equal(status.pending.length, 1);
+  assert.equal(status.error, 'remote_only_sync_disabled');
   store.close();
 });
 
-test('event_conflicts lists stored conflicts', async () => {
+test('event_conflicts does not read the local conflict cache', async () => {
   const store = activeStore();
   store.recordConflict({
     accountId: 'a',
@@ -70,6 +91,6 @@ test('event_conflicts lists stored conflicts', async () => {
   });
   const handlers = createMcpHandlers({ store, calendarService: null, pendingApprovals: new Map() });
   const conflicts = await handlers.event_conflicts({ accountId: 'a' });
-  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts.error, 'remote_only_sync_disabled');
   store.close();
 });

@@ -1,7 +1,6 @@
 import { assertSafeMetadata } from '../core/account-registry.mjs';
 import { createApproval, verifyApproval } from '../core/approval.mjs';
 import { buildVeventIcal } from '../calendar/ical.mjs';
-import { updateEventLocal } from '../calendar/local-event-service.mjs';
 
 /**
  * Build MCP tool handler functions (testable without stdio transport).
@@ -65,38 +64,41 @@ export function createMcpHandlers({ store, calendarService, pendingApprovals }) 
       }
     },
 
-    async calendar_sync({ accountId, mode = 'incremental' }) {
+    async calendar_sync({ accountId }) {
       if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
-      if (!calendarService) return { error: 'calendar_service_unavailable' };
-      try {
-        return await calendarService.syncAccount(accountId, { mode, store });
-      } catch (error) {
-        return { error: error.message };
-      }
+      return remoteOnlyCalendarStatus(accountId);
     },
 
-    async calendar_sync_all({ mode = 'incremental' }) {
-      const results = [];
-      for (const account of registry.list()) {
-        try {
-          results.push(await calendarService.syncAccount(account.id, { mode, store }));
-        } catch (error) {
-          results.push({ accountId: account.id, error: error.message });
-        }
-      }
-      return { mode, results };
+    async calendar_sync_all() {
+      const accountIds = registry.list().map((account) => account.id);
+      return {
+        accounts: accountIds.map((accountId) => remoteOnlyCalendarStatus(accountId)),
+        mode: 'remote-only',
+        syncEnabled: false,
+        syncStarted: false
+      };
     },
 
     async event_search({ accountId, query = '', start = null, end = null, limit = 50 }) {
       if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
-      return store.searchEvents(accountId, { query, start, end, limit });
+      if (typeof calendarService?.searchEvents !== 'function') return { error: 'calendar_service_unavailable' };
+      try {
+        return await calendarService.searchEvents(accountId, { query, start, end, limit });
+      } catch (error) {
+        return { error: error.message || 'provider_unavailable' };
+      }
     },
 
     async event_read({ eventKey }) {
-      const accountId = eventKey.split('::', 1)[0];
+      const accountId = String(eventKey ?? '').split('::')[0];
       if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
-      const event = store.getEventByKey(eventKey);
-      return event ?? { error: 'event_not_found' };
+      if (typeof calendarService?.readEvent !== 'function') return { error: 'calendar_service_unavailable' };
+      try {
+        const event = await calendarService.readEvent(eventKey);
+        return event ?? { error: 'event_not_found' };
+      } catch (error) {
+        return { error: error.message || 'provider_unavailable' };
+      }
     },
 
     async event_preview(input) {
@@ -136,7 +138,7 @@ export function createMcpHandlers({ store, calendarService, pendingApprovals }) 
       pendingApprovals.delete(approvalId);
       if (!calendarService) return { error: 'calendar_service_unavailable' };
       try {
-        return await calendarService.writeEvent(normalized.accountId, normalized, { store });
+        return await calendarService.writeEvent(normalized.accountId, normalized);
       } catch (error) {
         return { error: error.message };
       }
@@ -154,24 +156,33 @@ export function createMcpHandlers({ store, calendarService, pendingApprovals }) 
 
     async event_update_local(input) {
       if (!registry.status(input.accountId)?.enabled) return { error: 'account_not_active' };
-      try {
-        return updateEventLocal(store, input);
-      } catch (error) {
-        return { error: error.message };
-      }
+      return { error: 'remote_only_local_writes_disabled' };
     },
 
-    async event_upload_status({ accountId, calendarId = null }) {
+    async event_upload_status({ accountId }) {
       if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
-      const pending = store.listDirtyEvents(accountId, { calendarId, status: 'pending' });
-      const failed = store.listDirtyEvents(accountId, { calendarId, status: 'failed' });
-      const conflict = store.listDirtyEvents(accountId, { calendarId, status: 'conflict' });
-      return { pending, failed, conflict };
+      return { error: 'remote_only_sync_disabled' };
     },
 
     async event_conflicts({ accountId }) {
       if (!registry.status(accountId)?.enabled) return { error: 'account_not_active' };
-      return store.listConflicts(accountId);
+      return { error: 'remote_only_sync_disabled' };
     }
+  };
+}
+
+/**
+ * Status payload when background calendar sync is disabled.
+ * @param {string} accountId Account id.
+ * @returns {object} Remote-only status without checkpoints.
+ */
+function remoteOnlyCalendarStatus(accountId) {
+  return {
+    accountId,
+    mode: 'remote-only',
+    syncEnabled: false,
+    state: 'remote_only',
+    calendars: [],
+    syncStarted: false
   };
 }

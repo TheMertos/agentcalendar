@@ -2,61 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod/v4';
 import { loadConfig } from '../config.mjs';
-import { SqliteCalendarStore } from '../storage/sqlite-store.mjs';
-import { createLeaseBroker } from '../security/lease-broker.mjs';
-import { createSecretFabricResolver } from '../security/secretfabric-resolver.mjs';
-import { CalendarService, CALDAV_SYNC_FIELDS } from '../calendar/calendar-service.mjs';
-import { createCaldavProvider } from '../calendar/caldav-provider.mjs';
-import { SyncWorker } from '../calendar/sync-worker.mjs';
+import { createCalendarRuntime } from '../runtime/calendar-runtime.mjs';
 import { createMcpHandlers } from './handlers.mjs';
 
 const config = loadConfig();
-const store = new SqliteCalendarStore(config.dbPath);
+const { store, calendarService } = createCalendarRuntime(config);
 const pendingApprovals = new Map();
-
-const resolveCredentials = createSecretFabricResolver({
-  baseUrl: config.secretFabricUrl,
-  apiToken: config.secretFabricApiToken
-});
-
-const leaseBroker = createLeaseBroker({
-  resolver: ({ accountId, purpose }) => {
-    const account = store.getAccount(accountId);
-    if (!account) throw new Error('account_not_found');
-    return resolveCredentials({
-      resourceId: account.secretRef,
-      purpose,
-      fieldPaths: CALDAV_SYNC_FIELDS
-    });
-  }
-});
-
-async function providerFactory({ account, lease }) {
-  const credentials = leaseBroker.getPrivate(lease.leaseId);
-  if (!credentials) throw new Error('credential_lease_unavailable');
-  return createCaldavProvider({ connection: account.connection ?? {}, credentials });
-}
-
-const calendarService = new CalendarService({
-  accountRegistry: { get: (accountId) => store.getAccount(accountId) },
-  leaseBroker,
-  providerFactory
-});
-
 const handlers = createMcpHandlers({ store, calendarService, pendingApprovals });
-
-const syncWorker = new SyncWorker({
-  accounts: { list: () => store.listActiveAccounts() },
-  sync: (accountId, options) => calendarService.syncAccount(accountId, { ...options, store }),
-  upload: (accountId) => calendarService.uploadDirtyEvents(accountId, { store }),
-  policy: {
-    shouldAutoUpload(accountId) {
-      return store.listSyncPolicies(accountId).some((row) => row.autoUpload);
-    }
-  },
-  intervalMs: config.syncIntervalSeconds * 1000
-});
-syncWorker.start();
 
 const server = new McpServer({ name: 'agentcalendar', version: '0.1.0' });
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
@@ -93,17 +45,20 @@ server.registerTool('calendar_list', {
 }, async ({ accountId }) => text(await handlers.calendar_list({ accountId })));
 
 server.registerTool('calendar_sync', {
-  description: 'Full or incremental sync for one account into the local mirror.',
-  inputSchema: { accountId: z.string().min(1), mode: z.enum(['full', 'incremental']).default('incremental') }
-}, async ({ accountId, mode }) => text(await handlers.calendar_sync({ accountId, mode })));
+  description: 'Report that background calendar sync is disabled. Does not start, enqueue, or wait for a sync. Does not read local checkpoints. Never returns credentials.',
+  inputSchema: {
+    accountId: z.string().min(1),
+    mode: z.enum(['full', 'incremental']).optional()
+  }
+}, async ({ accountId }) => text(await handlers.calendar_sync({ accountId })));
 
 server.registerTool('calendar_sync_all', {
-  description: 'Sync every enabled calendar account.',
-  inputSchema: { mode: z.enum(['full', 'incremental']).default('incremental') }
-}, async ({ mode }) => text(await handlers.calendar_sync_all({ mode })));
+  description: 'Report that background calendar sync is disabled for every active account. Does not start, enqueue, or wait for a sync. Does not read local checkpoints. Never returns credentials.',
+  inputSchema: { mode: z.enum(['full', 'incremental']).optional() }
+}, async () => text(await handlers.calendar_sync_all()));
 
 server.registerTool('event_search', {
-  description: 'Search the local event mirror by text and optional date range.',
+  description: 'Search live CalDAV events by text and optional date range. Does not read a local event mirror.',
   inputSchema: {
     accountId: z.string().min(1),
     query: z.string().default(''),
@@ -114,7 +69,7 @@ server.registerTool('event_search', {
 }, async (input) => text(await handlers.event_search(input)));
 
 server.registerTool('event_read', {
-  description: 'Read one complete mirrored event by eventKey.',
+  description: 'Read one complete event from CalDAV by eventKey. Does not read a local event mirror.',
   inputSchema: { eventKey: z.string().min(1) }
 }, async ({ eventKey }) => text(await handlers.event_read({ eventKey })));
 
@@ -171,7 +126,7 @@ server.registerTool('sync_policy_set', {
 }, async (input) => text(await handlers.sync_policy_set(input)));
 
 server.registerTool('event_update_local', {
-  description: 'Mutate the local mirror and enqueue a dirty upload (does not contact CalDAV).',
+  description: 'Disabled in remote-only mode. Event changes go through event_preview, event_approval_create, and event_write.',
   inputSchema: {
     accountId: z.string().min(1),
     calendarId: z.string().min(1),
