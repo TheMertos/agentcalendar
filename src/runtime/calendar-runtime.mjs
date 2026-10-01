@@ -7,7 +7,7 @@ import { createCaldavProvider } from '../calendar/caldav-provider.mjs';
 /**
  * Wire the SQLite store, active-account lookup, SecretFabric lease broker, and CalendarService.
  * Does not start calendar sync. Interactive tools use CalendarService against the live CalDAV provider.
- * @param {{ dbPath: string, secretFabricUrl: string, secretFabricApiToken: string }} config Validated runtime configuration.
+ * @param {{ dbPath: string, secretFabricUrl: string, secretFabricApiToken: string, principal: string }} config Validated runtime configuration.
  * @param {{ fetchImpl?: typeof fetch, providerFactory?: Function }} [options] Optional test seams.
  * @returns {{ config: object, store: SqliteCalendarStore, calendarService: CalendarService, close: () => void }}
  */
@@ -16,6 +16,7 @@ export function createCalendarRuntime(config, options = {}) {
   const resolveCredentials = createSecretFabricResolver({
     baseUrl: config.secretFabricUrl,
     apiToken: config.secretFabricApiToken,
+    principal: config.principal,
     fetchImpl: options.fetchImpl
   });
   const leaseBroker = createLeaseBroker({

@@ -2,10 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod/v4';
 import { loadConfig } from '../config.mjs';
+import { assertNativeService } from '../runtime/native-service.mjs';
 import { createCalendarRuntime } from '../runtime/calendar-runtime.mjs';
 import { createMcpHandlers } from './handlers.mjs';
 
-const config = loadConfig();
+const config = String(process.env.AGENTCAL_SERVICE_MODE ?? '').trim() === 'native'
+  ? assertNativeService(process.env)
+  : loadConfig();
 const { store, calendarService } = createCalendarRuntime(config);
 const pendingApprovals = new Map();
 const handlers = createMcpHandlers({ store, calendarService, pendingApprovals });
@@ -153,7 +156,23 @@ server.registerTool('event_conflicts', {
   inputSchema: { accountId: z.string().min(1) }
 }, async ({ accountId }) => text(await handlers.event_conflicts({ accountId })));
 
+/**
+ * Hold the native host service open without starting sync or an MCP stdio session.
+ * @returns {Promise<void>}
+ */
+function holdNativeService() {
+  return new Promise((resolve) => {
+    const stop = () => resolve();
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
+  });
+}
+
 async function main() {
+  if (process.env.AGENTCAL_NATIVE_HOLD === '1') {
+    await holdNativeService();
+    return;
+  }
   if (config.transport !== 'stdio') {
     throw new Error('streamable-http transport is not implemented in this pass');
   }

@@ -12,6 +12,8 @@ test('runtime configuration validates values', () => {
     AGENTCAL_SYNC_INTERVAL_SECONDS: '300',
     AGENTCAL_LOG_LEVEL: 'info',
     AGENTCAL_TRANSPORT: 'stdio',
+    AGENTCAL_PRINCIPAL: 'mert',
+    SECRET_FABRIC_PRINCIPAL: 'mert',
     SECRET_FABRIC_URL: 'http://127.0.0.1:3000',
     SECRET_FABRIC_API_TOKEN: 'tok'
   });
@@ -20,7 +22,10 @@ test('runtime configuration validates values', () => {
     syncIntervalSeconds: 300,
     logLevel: 'info',
     transport: 'stdio',
+    principal: 'mert',
+    secretFabricPrincipal: 'mert',
     secretFabricUrl: 'http://127.0.0.1:3000',
-    secretFabricApiToken: 'tok'
+    secretFabricApiToken: 'tok',
+    serviceMode: 'docker'
   });
 });

@@ -17,7 +17,12 @@ test('resolver posts scoped caldav-sync request and extracts username/password',
       })
     };
   };
-  const resolver = createSecretFabricResolver({ baseUrl: 'http://127.0.0.1:3000', apiToken: 'tok', fetchImpl });
+  const resolver = createSecretFabricResolver({
+    baseUrl: 'http://127.0.0.1:3000',
+    apiToken: 'tok',
+    principal: 'mert',
+    fetchImpl
+  });
   const result = await resolver({
     resourceId: 'r1',
     purpose: 'caldav-sync',
@@ -26,6 +31,7 @@ test('resolver posts scoped caldav-sync request and extracts username/password',
   assert.deepEqual(result, { username: 'user@example.test', password: 'secret' });
   assert.equal(seenRequest.url, 'http://127.0.0.1:3000/api/resolve');
   assert.equal(seenRequest.headers.authorization, 'Bearer tok');
+  assert.equal(seenRequest.headers['x-hermes-principal'], 'mert');
   assert.deepEqual(seenRequest.body, {
     resourceId: 'r1',
     purpose: 'caldav-sync',
@@ -35,7 +41,7 @@ test('resolver posts scoped caldav-sync request and extracts username/password',
 
 test('resolver rejects when required fields are missing', async () => {
   const fetchImpl = async () => ({ ok: true, json: async () => ({ fields: {} }) });
-  const resolver = createSecretFabricResolver({ baseUrl: 'http://x', apiToken: 't', fetchImpl });
+  const resolver = createSecretFabricResolver({ baseUrl: 'http://x', apiToken: 't', principal: 'mert', fetchImpl });
   await assert.rejects(
     () => resolver({ resourceId: 'r1', purpose: 'caldav-sync', fieldPaths: ['auth.password'] }),
     /resolved_credential_incomplete/
@@ -44,7 +50,7 @@ test('resolver rejects when required fields are missing', async () => {
 
 test('resolver surfaces a non-ok HTTP response as an error', async () => {
   const fetchImpl = async () => ({ ok: false, status: 403, json: async () => ({ error: 'field_path_not_allowed' }) });
-  const resolver = createSecretFabricResolver({ baseUrl: 'http://x', apiToken: 't', fetchImpl });
+  const resolver = createSecretFabricResolver({ baseUrl: 'http://x', apiToken: 't', principal: 'mert', fetchImpl });
   await assert.rejects(
     () => resolver({ resourceId: 'r1', purpose: 'caldav-sync', fieldPaths: ['bad'] }),
     /field_path_not_allowed/

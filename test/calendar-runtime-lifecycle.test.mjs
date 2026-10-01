@@ -235,7 +235,8 @@ test('disabled worker does not sync or upload through SecretFabric', async () =>
     logLevel: 'info',
     transport: 'stdio',
     secretFabricUrl: 'http://secretfabric.test',
-    secretFabricApiToken: 'test-token'
+    secretFabricApiToken: 'test-token',
+    principal: 'mert'
   }, { fetchImpl, providerFactory });
   let stop = () => {};
   try {

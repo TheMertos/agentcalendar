@@ -1,0 +1,19 @@
+[Unit]
+Description=AgentCalendar native MCP host service for profile %i
+Documentation=file://%h/agentcalendar/docs/COMPOSE-TRANSITION.md
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/agentcalendar
+Environment=HOME=%h
+Environment=AGENTCAL_SERVICE_MODE=native
+Environment=AGENTCAL_NATIVE_HOLD=1
+Environment=AGENTCAL_PROFILE=%i
+EnvironmentFile=-%h/.config/agentcalendar/%i.env
+ExecStart=%h/agentcalendar/tools/agentcalendar-native-mcp.sh --service %i
+Restart=on-failure
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
