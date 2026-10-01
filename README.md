@@ -30,8 +30,8 @@ Headless MCP CalDAV calendar server for AI agents. Sibling to [AgentMail](https:
 | `SECRET_FABRIC_API_TOKEN` | Bearer token for `/api/resolve` |
 | `AGENTCAL_PRINCIPAL` | Trusted principal. Must match `SECRET_FABRIC_PRINCIPAL` |
 | `SECRET_FABRIC_PRINCIPAL` | Sent as `x-hermes-principal`. Never taken from tool arguments |
-| `AGENTCAL_SERVICE_MODE` | `native` or `docker`. Defaults to `docker` |
-| `AGENTCAL_PROFILE` | Required when `AGENTCAL_SERVICE_MODE=native`. Must match the principal |
+| `AGENTCAL_SERVICE_MODE` | `native`. This is the only supported mode |
+| `AGENTCAL_PROFILE` | Required. Must match the principal |
 
 ## Local development
 
@@ -52,7 +52,7 @@ yarn start
 
 ## Native host service
 
-The supported process is Node on the host, started by `tools/hermes-agentcalendar-mcp.sh` or the systemd user template `deploy/systemd/user/agentcalendar@.service`. Both set `AGENTCAL_SERVICE_MODE=native` and the profile principal. They do not start a sync worker. Install steps are in [`docs/COMPOSE-TRANSITION.md`](docs/COMPOSE-TRANSITION.md).
+The supported process is Node on the host, started by `tools/hermes-agentcalendar-mcp.sh` or the systemd user template `deploy/systemd/user/agentcalendar@.service`. Both set `AGENTCAL_SERVICE_MODE=native` and the profile principal. They do not start a sync worker. Install steps are in [`docs/COMPOSE-TRANSITION.md`](docs/COMPOSE-TRANSITION.md). This repository does not ship a container image or Compose file.
 
 ```bash
 export SECRET_FABRIC_URL=http://127.0.0.1:3000
@@ -61,26 +61,13 @@ export HERMES_HOME="$HOME/.hermes"
 tools/hermes-agentcalendar-mcp.sh
 ```
 
-## Docker
-
-```bash
-export SECRET_FABRIC_URL=http://127.0.0.1:3000
-export SECRET_FABRIC_API_TOKEN=your-token
-docker compose build
-docker compose up -d
-```
-
-`docker compose up` starts only the MCP server and keeps the named `agentcalendar-data` volume. Compose has no worker service. The image entrypoint is `node src/mcp/server.mjs`. `AGENTCAL_SERVICE_MODE=docker` marks this path as the transition runtime. Do not remove the volume or stop a running container just to switch to the native service. `AGENTCAL_SYNC_INTERVAL_SECONDS` is set in Compose only so startup validation succeeds.
-
-`network_mode: host` lets the container reach SecretFabric on the host loopback.
-
 ## Hermes MCP example
 
 ```bash
 hermes mcp add agentcalendar -- /path/to/agentcalendar/tools/hermes-agentcalendar-mcp.sh
 ```
 
-Register the native wrapper, not `docker exec`. The wrapper sets `AGENTCAL_PRINCIPAL` and `SECRET_FABRIC_PRINCIPAL` from `HERMES_HOME`. Empty `SECRET_FABRIC_URL` and `SECRET_FABRIC_API_TOKEN` values are loaded from `~/.config/agentcalendar/<profile>.env`. Values already present in the environment are kept. The wrapper exits if either value is still missing and does not print secrets.
+Register the native wrapper. It sets `AGENTCAL_PRINCIPAL` and `SECRET_FABRIC_PRINCIPAL` from `HERMES_HOME`. Empty `SECRET_FABRIC_URL` and `SECRET_FABRIC_API_TOKEN` values are loaded from `~/.config/agentcalendar/<profile>.env`. Values already present in the environment are kept. The wrapper exits if either value is still missing and does not print secrets.
 
 ## MCP tools (summary)
 

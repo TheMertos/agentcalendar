@@ -11,17 +11,15 @@ import { buildVeventIcal } from '../src/calendar/ical.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
-test('compose keeps the MCP service and does not run a calendar worker', () => {
-  const compose = readFileSync(join(repoRoot, 'compose.yaml'), 'utf8');
-  const dockerfile = readFileSync(join(repoRoot, 'Dockerfile'), 'utf8');
-  assert.doesNotMatch(compose, /agentcalendar-worker/);
-  assert.doesNotMatch(compose, /calendar-runtime-worker/);
-  assert.match(compose, /container_name: agentcalendar\n/);
-  assert.match(compose, /stdin_open: true/);
-  assert.match(compose, /agentcalendar-data:/);
-  assert.match(compose, /name: agentcalendar-data/);
-  assert.match(dockerfile, /ENTRYPOINT \["node", "src\/mcp\/server\.mjs"\]/);
-  assert.doesNotMatch(dockerfile, /calendar-runtime-worker/);
+test('native unit and launcher run MCP and do not start a calendar worker', () => {
+  const unit = readFileSync(join(repoRoot, 'deploy/systemd/user/agentcalendar@.service'), 'utf8');
+  const launcher = readFileSync(join(repoRoot, 'tools/agentcalendar-native-mcp.sh'), 'utf8');
+  const source = `${unit}\n${launcher}`;
+  assert.match(unit, /agentcalendar-native-mcp\.sh --service %i/);
+  assert.match(launcher, /src\/mcp\/server\.mjs/);
+  assert.doesNotMatch(source, /agentcalendar-worker|calendar-runtime-worker|docker/);
+  assert.match(unit, /AGENTCAL_SERVICE_MODE=native/);
+  assert.match(unit, /AGENTCAL_NATIVE_HOLD=1/);
 });
 
 test('MCP server does not start a sync worker', () => {

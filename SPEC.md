@@ -10,9 +10,9 @@ Headless MCP CalDAV calendar server for AI agents, sibling project to AgentMail 
 - Test-Driven Development is mandatory: for every new module, write the failing test first (`node --test`), watch it fail, then implement. Do not write implementation before its test exists. Use `node:test` + `node:assert/strict`, no other test framework.
 - No secrets ever pass through MCP tool arguments or tool results. Calendar account credentials (CalDAV base URL, username, password) are resolved through a SecretFabric-style lease broker, exactly like AgentMail's `src/security/lease-broker.mjs` and `src/security/secretfabric-resolver.mjs` (copy these two files verbatim into this repo, they are reusable as-is).
 - Env vars are REQUIRED for runtime configuration only (fail closed at startup if missing), never for account data: `AGENTCAL_DB_PATH`, `AGENTCAL_SYNC_INTERVAL_SECONDS`, `AGENTCAL_LOG_LEVEL`, `AGENTCAL_TRANSPORT` (stdio|streamable-http), `SECRET_FABRIC_URL`, `SECRET_FABRIC_API_TOKEN`. Model this exactly on AgentMail's `src/config.mjs` (copy the pattern, adapt var names). `AGENTCAL_SYNC_INTERVAL_SECONDS` stays a required integer ≥ 30 so startup still fails closed. It does not schedule a sync.
-- SQLite (`better-sqlite3`) under a Docker volume stores the active-account allowlist: non-sensitive account metadata and an opaque SecretFabric `secretRef`. Interactive reads, searches, and writes do not use a local event mirror. The agent may only touch calendars explicitly added to the active list.
+- SQLite (`better-sqlite3`) in the profile data directory stores the active-account allowlist: non-sensitive account metadata and an opaque SecretFabric `secretRef`. Interactive reads, searches, and writes do not use a local event mirror. The agent may only touch calendars explicitly added to the active list.
 - SecretFabric already has a `caldav` resource schema (see /home/mert/secretfabric/src/lib/schema-catalog.ts) with fields: `identity.email`, `server.baseUrl`, `server.calendarPath`, `auth.username`, `auth.password` (sensitive/claimOnly). The resolver endpoint at SecretFabric `/api/resolve` already accepts purpose `caldav-sync` and these field paths (see /home/mert/secretfabric/src/lib/resolver.ts, ALLOWED_PATHS includes `server.baseUrl`, `server.calendarPath`, `auth.username`, `auth.password`, `identity.email`). Use purpose `caldav-sync` for every lease request.
-- Docker: multi-stage Dockerfile like AgentMail's (node:22-alpine, python3/make/g++ for native module builds, non-root user, ENTRYPOINT running the MCP server over stdio). compose.yaml should use `network_mode: host` so the container can reach SecretFabric at 127.0.0.1:3000, and a named volume for the SQLite file, with the four AGENTCAL_* env vars plus SECRET_FABRIC_URL/SECRET_FABRIC_API_TOKEN required (fail closed via `:?` in compose.yaml, matching AgentMail's compose.yaml).
+- Native host service: `deploy/systemd/user/agentcalendar@.service` and `tools/hermes-agentcalendar-mcp.sh` run `node src/mcp/server.mjs` with `AGENTCAL_SERVICE_MODE=native`. Required env is `AGENTCAL_DB_PATH`, `AGENTCAL_SYNC_INTERVAL_SECONDS`, `AGENTCAL_LOG_LEVEL`, `AGENTCAL_TRANSPORT`, `AGENTCAL_PRINCIPAL`, `SECRET_FABRIC_PRINCIPAL`, `SECRET_FABRIC_URL`, and `SECRET_FABRIC_API_TOKEN`. The profile must match the principal.
 - MIT or Apache-2.0 license, README explaining scope and safety model (model tone on AgentMail's README/docs/HEADLESS-MCP.md — headless, human-in-the-loop, credential boundary).
 
 ## Reference implementation to study first
@@ -24,7 +24,7 @@ Read these AgentMail files before writing anything (path: /home/mert/agent-mail-
 - src/storage/sqlite-store.mjs (only the active_accounts section, not the mail-specific tables)
 - src/mail/mail-service.mjs (the credential-lease-then-provider-factory pattern)
 - src/mcp/server.mjs (how tools are registered, how config/store/leaseBroker/providerFactory are wired together)
-- Dockerfile, compose.yaml, .dockerignore, eslint.config.mjs, package.json
+- deploy/systemd/user/agentcalendar@.service, tools/hermes-agentcalendar-mcp.sh, eslint.config.mjs, package.json
 
 Copy the lease-broker.mjs and secretfabric-resolver.mjs files verbatim (they are generic, not mail-specific). Adapt everything else to calendars.
 
@@ -46,7 +46,7 @@ Calendars and events are remote CalDAV objects. Interactive tools do not persist
 ## Remote-only calendar access
 
 - `calendar_list`, `event_search`, `event_read`, and approved `event_write` talk to CalDAV on each call.
-- There is no background sync worker, no sync interval, and no IMAP IDLE equivalent. Compose runs only the MCP service. The worker entrypoint and `yarn start:worker` are disabled and must not be treated as an active sync process.
+- There is no background sync worker, no sync interval, and no IMAP IDLE equivalent. The native service runs only the MCP server. The worker entrypoint and `yarn start:worker` are disabled and must not be treated as an active sync process.
 - SQLite keeps account metadata and opaque SecretFabric refs. Interactive operations do not read or write a local event mirror.
 - Provider and lease failures return an error (`calendar_list`, `event_search`, `event_read`, `event_write`). Results are not filled from SQLite. A missing remote event is `event_not_found`.
 - `event_write` loads the current remote ETag when a UID is present, sends it as `If-Match`, then reads the event back. UID, summary, and ETag must match. `412` / `precondition_failed` does not overwrite the remote event. The verified event is not stored locally.
@@ -81,10 +81,10 @@ Write operations (must be approval-gated exactly like AgentMail's send_approval_
 ## Acceptance checklist (must all be true before calling this done)
 
 1. `yarn lint && yarn test` is green (eslint + node:test), with tests written before implementation for every new module (TDD, RED→GREEN visible in commit history is a bonus but not required — the important thing is real, meaningful, currently-passing tests exist for account registry, lease broker reuse, sync engine idempotency, approval verify/expire, and MCP tool wiring where feasible without a live CalDAV server).
-2. `docker compose build` succeeds.
-3. `docker compose up -d` starts a healthy/running container.
-4. Git repo initialized at /home/mert/agentcalendar, first commit made, remote NOT pushed yet (I will review and push it myself after you're done — do not run `git push` or create a GitHub repo).
-5. Write a final summary file at /home/mert/agentcalendar/IMPLEMENTATION_REPORT.md listing: what was implemented, test count and pass/fail, what is stubbed/not implemented (e.g. if tsdav integration couldn't be verified against a live server, say so explicitly), and exact commands to verify (yarn test, docker compose build, docker compose up -d, hermes mcp add example).
+2. `systemctl --user is-active agentcalendar@default.service` reports the native unit.
+3. The Hermes command is `tools/hermes-agentcalendar-mcp.sh`.
+4. Git history stays on the existing repository.
+5. `IMPLEMENTATION_REPORT.md` lists what was implemented, the test count, and native verification commands (`yarn lint`, `node --test --test-concurrency=1 test/**/*.test.mjs`).
 
 ## Explicitly out of scope for this pass
 

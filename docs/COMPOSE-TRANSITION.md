@@ -1,6 +1,6 @@
-# Native host service and Compose transition
+# Native host service
 
-AgentCalendar's supported runtime is a native host service. Docker Compose remains available and is not removed. Do not delete the `agentcalendar-data` volume and do not stop the current container as part of this change. Interactive calendar access stays remote-only: no event mirror reads, no background sync worker, and no long-lived remote watch.
+AgentCalendar's supported runtime is a native host service. Interactive calendar access stays remote-only: no event mirror reads, no background sync worker, and no long-lived remote watch. This repository does not ship a container image or Compose file.
 
 ## Native layout
 
@@ -39,7 +39,3 @@ Hermes MCP:
 ```bash
 hermes mcp add agentcalendar -- /home/mert/agentcalendar/tools/hermes-agentcalendar-mcp.sh
 ```
-
-## Compose
-
-`compose.yaml` sets `AGENTCAL_SERVICE_MODE=docker` and `AGENTCAL_PRINCIPAL` from `AGENTCAL_PROFILE` (default `default`). It still starts only the MCP server. Leave the existing container and named volume in place until you retire them. The Hermes wrapper does not use `docker compose run`.

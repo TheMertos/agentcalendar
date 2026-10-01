@@ -72,8 +72,9 @@ exit 0
   return { binDir, logPath };
 }
 
-test('service mode rejects values other than native or docker', () => {
-  assert.throws(() => loadConfig({ ...BASE_ENV, AGENTCAL_SERVICE_MODE: 'mirror' }), /AGENTCAL_SERVICE_MODE/);
+test('service mode accepts only native', () => {
+  assert.throws(() => loadConfig({ ...BASE_ENV, AGENTCAL_SERVICE_MODE: 'docker' }), /AGENTCAL_SERVICE_MODE must be native/);
+  assert.equal(loadConfig(BASE_ENV).serviceMode, 'native');
 });
 
 test('native service mode requires a matching profile', () => {

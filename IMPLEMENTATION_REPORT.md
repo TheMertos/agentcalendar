@@ -13,7 +13,7 @@
 - **Disabled worker** — `src/worker/calendar-runtime-worker.mjs` throws `remote_only_sync_disabled` and does not open SQLite, SecretFabric, or CalDAV. `yarn start:worker` prints that code and exits 1. It is not part of normal operation.
 - **CalDAV** — `tsdav`-based `createCaldavProvider` with injectable `davFactory` for tests; `If-Match` on PUT when etag is known.
 - **MCP** — stdio server and `handlers.mjs`. `event_update_local` returns `remote_only_local_writes_disabled`. `event_upload_status` and `event_conflicts` return `remote_only_sync_disabled`.
-- **Docker** — multi-stage `Dockerfile` (MCP entrypoint `node src/mcp/server.mjs`). `compose.yaml` has only the `agentcalendar` service, `network_mode: host`, named volume `agentcalendar-data`, and required env `:?` guards. No worker service.
+- **Native service** — `deploy/systemd/user/agentcalendar@.service` and `tools/hermes-agentcalendar-mcp.sh` run `node src/mcp/server.mjs` with `AGENTCAL_SERVICE_MODE=native`. No worker service.
 - **Docs** — `README.md`, `SPEC.md`, `LICENSE` (Apache-2.0).
 
 ## Not implemented / limitations
@@ -21,12 +21,12 @@
 - **`event_delete`** — omitted (optional in spec).
 - **`AGENTCAL_TRANSPORT=streamable-http`** — rejected at startup with explicit error (stdio only).
 - **Live CalDAV** — no automated integration test against a real CalDAV server in CI. Upload/update URL semantics and calendar-query paging are exercised via injected mocks only. Stock `tsdav` does not implement a server-side result limit, so a window larger than the page returns `pagination_unavailable` instead of a cursor.
-- **Background sync, sync interval, and push/IDLE** — not part of interactive operation. Older sync/upload modules remain in the tree and are not started by the MCP server or Compose.
+- **Background sync, sync interval, and push/IDLE** — not part of interactive operation. Older sync/upload modules remain in the tree and are not started by the MCP server or the native unit.
 - **RRULE expansion** — raw RRULE string on the remote iCal body only.
 
 ## Tests
 
-Last run: **59 tests, 59 passed, 0 failed** (`yarn lint`, then `node --test --test-concurrency=1 test/**/*.test.mjs`). `git diff --check` was clean. `docker compose config` with dummy SecretFabric env showed only the `agentcalendar` service. `docker compose build` succeeded.
+Last run: `yarn lint`, then `node --test --test-concurrency=1 test/**/*.test.mjs`. `git diff --check` covers the native-only tree.
 
 | Area | Test file |
 |------|-----------|
@@ -59,19 +59,16 @@ yarn lint
 node --test --test-concurrency=1 test/**/*.test.mjs
 git diff --check
 
-export SECRET_FABRIC_URL=http://127.0.0.1:3000
-export SECRET_FABRIC_API_TOKEN=dummy
-docker compose config
-docker compose build
+systemctl --user is-active agentcalendar@default.service
 ```
 
 Hermes MCP add (example):
 
 ```bash
-hermes mcp add agentcalendar -- docker compose -f /home/mert/agentcalendar/compose.yaml run --rm -T agentcalendar
+hermes mcp add agentcalendar -- /home/mert/agentcalendar/tools/hermes-agentcalendar-mcp.sh
 ```
 
-Normal operation is `yarn start` or the Compose MCP service. Do not start a background sync worker.
+Normal operation is the native user service or `tools/hermes-agentcalendar-mcp.sh`. Do not start a background sync worker.
 
 ## SecretFabric integration
 

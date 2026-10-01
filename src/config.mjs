@@ -33,9 +33,9 @@ export function loadConfig(env = process.env) {
   if (principal !== secretFabricPrincipal) {
     throw new Error('AGENTCAL_PRINCIPAL must match SECRET_FABRIC_PRINCIPAL');
   }
-  const serviceMode = String(env.AGENTCAL_SERVICE_MODE ?? 'docker').trim();
-  if (serviceMode !== 'native' && serviceMode !== 'docker') {
-    throw new Error('AGENTCAL_SERVICE_MODE must be native or docker');
+  const serviceMode = String(env.AGENTCAL_SERVICE_MODE ?? 'native').trim();
+  if (serviceMode !== 'native') {
+    throw new Error('AGENTCAL_SERVICE_MODE must be native');
   }
   return {
     dbPath: env.AGENTCAL_DB_PATH,

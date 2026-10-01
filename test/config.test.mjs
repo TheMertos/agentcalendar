@@ -26,6 +26,6 @@ test('runtime configuration validates values', () => {
     secretFabricPrincipal: 'mert',
     secretFabricUrl: 'http://127.0.0.1:3000',
     secretFabricApiToken: 'tok',
-    serviceMode: 'docker'
+    serviceMode: 'native'
   });
 });

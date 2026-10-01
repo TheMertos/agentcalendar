@@ -1,14 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod/v4';
-import { loadConfig } from '../config.mjs';
 import { assertNativeService } from '../runtime/native-service.mjs';
 import { createCalendarRuntime } from '../runtime/calendar-runtime.mjs';
 import { createMcpHandlers } from './handlers.mjs';
 
-const config = String(process.env.AGENTCAL_SERVICE_MODE ?? '').trim() === 'native'
-  ? assertNativeService(process.env)
-  : loadConfig();
+const config = assertNativeService(process.env);
 const { store, calendarService } = createCalendarRuntime(config);
 const pendingApprovals = new Map();
 const handlers = createMcpHandlers({ store, calendarService, pendingApprovals });
