@@ -3,12 +3,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod/v4';
 import { assertNativeService } from '../runtime/native-service.mjs';
 import { createCalendarRuntime } from '../runtime/calendar-runtime.mjs';
+import { createCredentialCacheHandlers } from './credential-cache-tools.mjs';
 import { createMcpHandlers } from './handlers.mjs';
 
 const config = assertNativeService(process.env);
-const { store, calendarService } = createCalendarRuntime(config);
+const { store, calendarService, credentialSync } = createCalendarRuntime(config);
 const pendingApprovals = new Map();
 const handlers = createMcpHandlers({ store, calendarService, pendingApprovals });
+const credentialCache = createCredentialCacheHandlers({ store, credentialSync });
 
 const server = new McpServer({ name: 'agentcalendar', version: '0.1.0' });
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
@@ -43,6 +45,16 @@ server.registerTool('calendar_list', {
   description: 'List CalDAV calendars for an account. Requires a caldav-sync lease; credentials are never tool arguments.',
   inputSchema: { accountId: z.string().min(1) }
 }, async ({ accountId }) => text(await handlers.calendar_list({ accountId })));
+
+server.registerTool('credential_cache_status', {
+  description: 'Return encrypted credential-cache status for one active account. Never returns secrets, ciphertext, or lease material.',
+  inputSchema: { accountId: z.string().min(1) }
+}, async ({ accountId }) => text(await credentialCache.credentialCacheStatus({ accountId })));
+
+server.registerTool('credential_cache_reconcile', {
+  description: 'Refresh the service-owned encrypted credential cache from SecretFabric for one active account. Returns status and version metadata only.',
+  inputSchema: { accountId: z.string().min(1) }
+}, async ({ accountId }) => text(await credentialCache.credentialCacheReconcile({ accountId })));
 
 server.registerTool('calendar_sync', {
   description: 'Report that background calendar sync is disabled. Does not start, enqueue, or wait for a sync. Does not read local checkpoints. Never returns credentials.',

@@ -6,13 +6,14 @@ const REQUIRED = [
   'AGENTCAL_PRINCIPAL',
   'SECRET_FABRIC_PRINCIPAL',
   'SECRET_FABRIC_URL',
-  'SECRET_FABRIC_API_TOKEN'
+  'SECRET_FABRIC_API_TOKEN',
+  'CREDENTIAL_CACHE_KEY'
 ];
 
 /**
  * Load and validate runtime configuration from environment variables.
  * @param {Record<string, string|undefined>} [env]
- * @returns {{ dbPath: string, syncIntervalSeconds: number, logLevel: string, transport: string, principal: string, secretFabricPrincipal: string, secretFabricUrl: string, secretFabricApiToken: string, serviceMode: string }}
+ * @returns {{ dbPath: string, syncIntervalSeconds: number, logLevel: string, transport: string, principal: string, secretFabricPrincipal: string, secretFabricUrl: string, secretFabricApiToken: string, serviceMode: string, credentialCacheKey: string }}
  */
 export function loadConfig(env = process.env) {
   const missing = REQUIRED.filter((key) => !env[key]);
@@ -37,6 +38,7 @@ export function loadConfig(env = process.env) {
   if (serviceMode !== 'native') {
     throw new Error('AGENTCAL_SERVICE_MODE must be native');
   }
+  const credentialCacheKey = readCredentialCacheKey(env);
   return {
     dbPath: env.AGENTCAL_DB_PATH,
     syncIntervalSeconds: interval,
@@ -46,6 +48,20 @@ export function loadConfig(env = process.env) {
     secretFabricPrincipal,
     secretFabricUrl: env.SECRET_FABRIC_URL,
     secretFabricApiToken: env.SECRET_FABRIC_API_TOKEN,
-    serviceMode
+    serviceMode,
+    credentialCacheKey
   };
+}
+
+/**
+ * Require the external 32-byte hex cache key. It is not stored or logged.
+ * @param {Record<string, string|undefined>} env Process environment.
+ * @returns {string}
+ */
+function readCredentialCacheKey(env) {
+  const value = String(env.CREDENTIAL_CACHE_KEY ?? '').trim();
+  if (!/^[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error('CREDENTIAL_CACHE_KEY must be a 32-byte hexadecimal key');
+  }
+  return value;
 }

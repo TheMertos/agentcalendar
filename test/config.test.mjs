@@ -6,8 +6,10 @@ test('runtime configuration is mandatory', () => {
   assert.throws(() => loadConfig({}), /AGENTCAL_DB_PATH/);
 });
 
+const CACHE_KEY = 'ab'.repeat(32);
+
 test('runtime configuration validates values', () => {
-  const config = loadConfig({
+  const env = {
     AGENTCAL_DB_PATH: '/data/agentcalendar.db',
     AGENTCAL_SYNC_INTERVAL_SECONDS: '300',
     AGENTCAL_LOG_LEVEL: 'info',
@@ -15,8 +17,10 @@ test('runtime configuration validates values', () => {
     AGENTCAL_PRINCIPAL: 'mert',
     SECRET_FABRIC_PRINCIPAL: 'mert',
     SECRET_FABRIC_URL: 'http://127.0.0.1:3000',
-    SECRET_FABRIC_API_TOKEN: 'tok'
-  });
+    SECRET_FABRIC_API_TOKEN: 'tok',
+    CREDENTIAL_CACHE_KEY: CACHE_KEY
+  };
+  const config = loadConfig(env);
   assert.deepEqual(config, {
     dbPath: '/data/agentcalendar.db',
     syncIntervalSeconds: 300,
@@ -26,6 +30,10 @@ test('runtime configuration validates values', () => {
     secretFabricPrincipal: 'mert',
     secretFabricUrl: 'http://127.0.0.1:3000',
     secretFabricApiToken: 'tok',
-    serviceMode: 'native'
+    serviceMode: 'native',
+    credentialCacheKey: CACHE_KEY
   });
+  const { CREDENTIAL_CACHE_KEY: _key, ...withoutKey } = env;
+  assert.throws(() => loadConfig(withoutKey), /CREDENTIAL_CACHE_KEY/);
+  assert.throws(() => loadConfig({ ...env, CREDENTIAL_CACHE_KEY: 'short' }), /CREDENTIAL_CACHE_KEY/);
 });

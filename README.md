@@ -7,7 +7,7 @@ Headless MCP CalDAV calendar server for AI agents. Sibling to [AgentMail](https:
 - Reads, searches, and writes CalDAV events directly on the remote server.
 - Interactive tools do not read or write a local event mirror. SQLite stores account metadata and an opaque SecretFabric `secretRef` only for the allowlist.
 - There is no background sync worker, no sync interval, and no IMAP IDLE equivalent. Nothing polls or holds a long-lived remote watch.
-- Resolves CalDAV credentials only through SecretFabric short-lived leases (`caldav-sync` purpose).
+- Reconciles CalDAV credentials from SecretFabric into the service-owned encrypted cache (`caldav-sync` purpose), then decrypts only inside the service. `CREDENTIAL_CACHE_KEY` is required. There is no direct resolver fallback.
 - Gates every real write behind `event_preview` → `event_approval_create` → `event_write`. The approval is payload-bound and lasts five minutes.
 - On update, `event_write` loads the live ETag, sends it as `If-Match`, then reads the event back and checks UID, summary, and ETag.
 
@@ -28,6 +28,7 @@ Headless MCP CalDAV calendar server for AI agents. Sibling to [AgentMail](https:
 | `AGENTCAL_TRANSPORT` | `stdio` (only mode implemented in v0.1) |
 | `SECRET_FABRIC_URL` | SecretFabric base URL |
 | `SECRET_FABRIC_API_TOKEN` | Bearer token for `/api/resolve` |
+| `CREDENTIAL_CACHE_KEY` | Required external 64-character hexadecimal secret for the service-owned encrypted credential cache. Not stored in SQLite, MCP inputs or results, logs, or source |
 | `AGENTCAL_PRINCIPAL` | Trusted principal. Must match `SECRET_FABRIC_PRINCIPAL` |
 | `SECRET_FABRIC_PRINCIPAL` | Sent as `x-hermes-principal`. Never taken from tool arguments |
 | `AGENTCAL_SERVICE_MODE` | `native`. This is the only supported mode |
@@ -67,7 +68,7 @@ tools/hermes-agentcalendar-mcp.sh
 hermes mcp add agentcalendar -- /path/to/agentcalendar/tools/hermes-agentcalendar-mcp.sh
 ```
 
-Register the native wrapper. It sets `AGENTCAL_PRINCIPAL` and `SECRET_FABRIC_PRINCIPAL` from `HERMES_HOME`. Empty `SECRET_FABRIC_URL` and `SECRET_FABRIC_API_TOKEN` values are loaded from `~/.config/agentcalendar/<profile>.env`. Values already present in the environment are kept. The wrapper exits if either value is still missing and does not print secrets.
+Register the native wrapper. It sets `AGENTCAL_PRINCIPAL` and `SECRET_FABRIC_PRINCIPAL` from `HERMES_HOME`. Empty `SECRET_FABRIC_URL` and `SECRET_FABRIC_API_TOKEN` values are loaded from `~/.config/agentcalendar/<profile>.env`. Values already present in the environment are kept. The wrapper exits if either value is still missing and does not print secrets. `CREDENTIAL_CACHE_KEY` is a required external secret. The wrapper does not load it from the profile env file, so the MCP process environment must already contain it. The systemd user unit loads the whole env file.
 
 ## MCP tools (summary)
 
