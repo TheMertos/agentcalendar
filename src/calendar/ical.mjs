@@ -16,7 +16,7 @@ function toIcalUtc(iso) {
  * @returns {string}
  */
 export function buildVeventIcal(input) {
-  const uid = input.uid ?? randomUUID();
+  const uid = assertSingleLineValue(input.uid ?? randomUUID(), 'uid');
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -31,21 +31,57 @@ export function buildVeventIcal(input) {
   if (input.location) lines.push(`LOCATION:${escapeIcalText(input.location)}`);
   if (input.start) lines.push(`DTSTART:${toIcalUtc(input.start)}`);
   if (input.end) lines.push(`DTEND:${toIcalUtc(input.end)}`);
-  if (input.organizer) lines.push(`ORGANIZER:mailto:${input.organizer}`);
+  if (input.organizer) lines.push(`ORGANIZER:mailto:${assertSingleLineValue(input.organizer, 'organizer')}`);
   for (const attendee of input.attendees ?? []) {
-    lines.push(`ATTENDEE:mailto:${attendee}`);
+    lines.push(`ATTENDEE:mailto:${assertSingleLineValue(attendee, 'attendee')}`);
   }
-  if (input.recurrenceRule) lines.push(`RRULE:${input.recurrenceRule}`);
+  if (input.recurrenceRule) lines.push(`RRULE:${assertSingleLineValue(input.recurrenceRule, 'recurrenceRule')}`);
+  if (input.reminderMinutesBefore != null) {
+    const minutes = Number(input.reminderMinutesBefore);
+    if (!Number.isInteger(minutes) || minutes <= 0) throw new TypeError('invalid reminder');
+    lines.push(
+      'BEGIN:VALARM',
+      'ACTION:DISPLAY',
+      `DESCRIPTION:${escapeIcalText(input.summary ?? 'Calendar reminder')}`,
+      `TRIGGER:-PT${minutes}M`,
+      'END:VALARM'
+    );
+  }
   lines.push('END:VEVENT', 'END:VCALENDAR');
   return `${lines.join('\r\n')}\r\n`;
 }
 
 /**
- * Escape special characters in iCal text values.
+ * Escape special characters in iCal text values per RFC 5545 §3.3.11.
+ * CR is folded away (treated as part of a line terminator) so an embedded \r cannot
+ * survive into the serialized property value, matching the existing \n handling.
  * @param {string} value
  */
 function escapeIcalText(value) {
-  return String(value).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+  return String(value)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\n/g, '\\n');
+}
+
+/**
+ * Reject a value destined for a single-line iCal property (UID, ORGANIZER mailto,
+ * ATTENDEE mailto, RRULE) if it contains any CR or LF. These properties are
+ * interpolated verbatim rather than escaped, so an embedded line terminator would
+ * let the caller inject arbitrary extra VEVENT/VALARM/VCALENDAR properties or
+ * attendees — this must fail closed rather than silently strip or fold.
+ * @param {string} value Candidate single-line value.
+ * @param {string} field Field name, used only in the thrown error for diagnostics.
+ * @returns {string} The same value, when it is safe to interpolate.
+ * @throws {TypeError} When value contains a carriage return or line feed.
+ */
+function assertSingleLineValue(value, field) {
+  const text = String(value);
+  if (/[\r\n]/.test(text)) throw new TypeError(`invalid ${field}: must not contain CR or LF`);
+  return text;
 }
 
 /**
